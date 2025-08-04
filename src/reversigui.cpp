@@ -1,4 +1,4 @@
-#include "include/reversigui.h"
+#include "reversigui.h"
 
 ReversiGui::ReversiGui(QWidget *parent) :  QWidget(parent), ui(new Ui::ReversiGui), game(1), game2(0)
 {

@@ -1,4 +1,4 @@
-#include "include/calculation.h"
+#include "calculation.h"
 
 calc::calc(int number)
 {

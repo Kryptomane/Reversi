@@ -1,6 +1,6 @@
 #include <QApplication>
-#include "include/commonincludes.h"
-#include "include/reversigui.h"
+#include "commonincludes.h"
+#include "reversigui.h"
 
 int main(int argc, char *argv[])
 {
