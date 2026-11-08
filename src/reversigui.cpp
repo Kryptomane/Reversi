@@ -1,28 +1,43 @@
 #include "reversigui.h"
+#include <QTimer>
+#include "apppaths.h"
 
 ReversiGui::ReversiGui(QWidget *parent) :  QWidget(parent), ui(new Ui::ReversiGui), game(1), game2(0)
 {
     ui->setupUi(this);
     connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::terminate);
-    connect(ui->boardlabel, &ClickableLabel::clicked, this, &ReversiGui::getMove); //klick ins spielbrett
+	connect(ui->board, &BoardWidget::fieldClicked, this, &ReversiGui::onFieldClicked); // Klick/Tipp ins Spielbrett
 	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::startNewGame);
-	//TODO: createNewFolder mit Time
-	exportDirectory = "../Output/";
-	numPCgamers = 2;
+	exportDirectory = logDirectory();
+#ifndef Q_OS_ANDROID
+	resize(440, 680); // Desktop: Hochformat wie am Handy, frei skalierbar
+#endif
+	numPCgamers = 1;   // Mensch (Schwarz) gegen PC (Weiss)
+	humanColor = 1;
 	actualColor = 1;
+	busy = false;
+	gameOver = false;
+	aiSettings.timeMs = 3000;        // Bedenkzeit des PCs pro Zug
+	aiSettings.endgameEmpties = 20;  // ab 20 freien Feldern rechnet der PC bis zum Ende
 	init();
 }
 
 void ReversiGui::init()
 {
-	ColorWhite = cv::Scalar(255, 255, 255);
-	ColorBlack = cv::Scalar(0, 0, 0);
-	boardwidth = ui->boardlabel->width();
-	boardheight = ui->boardlabel->height();
 	makeNewLog();
 	QObject::installEventFilter(this);
 	testfile << "Spiel gestartet" << std::endl;
-	updateBoard(false);
+	// Auswahl der Bedenkzeit (Widgets kommen aus dem Layout in ui_reversigui.h)
+	timeLabel = ui->timeLabel;
+	timeBox = ui->timeBox;
+	for (int sec : { 1, 2, 3, 5, 10, 20, 30, 60 })
+		timeBox->addItem(QString::number(sec) + " s", sec * 1000);
+	timeBox->setCurrentIndex(timeBox->findData(aiSettings.timeMs));
+
+	// Schalter: besten Zug fuer den menschlichen Spieler anzeigen
+	hintBox = ui->hintBox;
+	connect(hintBox, &QCheckBox::toggled, this, &ReversiGui::onHintToggled);
+
 
 	game.mind = 8;
 	game.eval.sfield = 8;
@@ -35,7 +50,8 @@ void ReversiGui::init()
 
 	game.sayHello();
 
-	training();
+	// training(); // blockiert die GUI (1000 PC-gegen-PC-Partien) - nur bei Bedarf manuell aufrufen
+	startNewGame();
 }
 
 void ReversiGui::makeNewLog()
@@ -59,9 +75,188 @@ bool ReversiGui::eventFilter(QObject *object, QEvent *e)
 
 void ReversiGui::startNewGame()
 {
-	game.initBoard();
-	game.findMove(game.mboard, 1);
+	stopSearch();     // rechnet der PC noch an der alten Partie: abbrechen
+	posId++;
+	hintSquare = -1;
+	game.initBoard(); // setzt auch die Zugmarker fuer Schwarz
+	actualColor = 1;
+	gameOver = false;
+	busy = false;
+	lastPcInfo.clear();
+	ai.clear();
 	updateBoard(false);
+	if (isPC(actualColor))
+	{
+		bb::clearMarkers(game.mboard);
+		startSearch(false);
+	}
+	else
+	{
+		showStatus(QStringLiteral("Du bist dran (Schwarz)."));
+		if (hintBox && hintBox->isChecked())
+			startSearch(true);
+	}
+}
+
+bool ReversiGui::humanToMove() const
+{
+	return !gameOver && !busy && !isPC(actualColor);
+}
+
+void ReversiGui::onHintToggled(bool on)
+{
+	if (on)
+	{
+		if (humanToMove() && hintSquare < 0 && !hintRunning)
+			startSearch(true);
+	}
+	else
+	{
+		if (hintRunning)
+			stopSearch(); // nur die Tipp-Suche abbrechen, nie die PC-Suche
+		hintSquare = -1;
+		updateBoard(false);
+	}
+}
+
+// Startet eine Suche fuer die aktuelle Stellung: PC-Zug (hint = false) oder Tipp fuer den Menschen.
+void ReversiGui::startSearch(bool hint)
+{
+	if (searchThread.joinable())
+	{
+		ai.stop();            // falls noch eine (Tipp-)Suche laeuft
+		searchThread.join();
+	}
+	engine::Settings s = aiSettings;
+	const int selected = timeBox ? timeBox->currentData().toInt() : aiSettings.timeMs;
+	if (hint)
+	{
+		hintRunning = true;
+		s.timeMs = std::min(selected, 3000); // Tipp soll schnell da sein
+	}
+	else
+	{
+		busy = true;
+		hintRunning = false;
+		s.timeMs = selected;
+		showStatus(QStringLiteral("PC denkt ..."));
+	}
+	const board pos = game.mboard;   // Kopie: der Thread fasst die GUI-Daten nicht an
+	const int8_t color = (int8_t)actualColor;
+	const int id = posId;
+	ai.resetStop();
+	searchThread = std::thread([this, pos, color, s, id, hint]() {
+		const engine::Result r = engine::bestMove(ai, pos, color, s);
+		// Ergebnis in den GUI-Thread schicken (Qt::QueuedConnection blockiert nicht)
+		QMetaObject::invokeMethod(this, [this, r, id, hint]() { onSearchResult(r, id, hint); }, Qt::QueuedConnection);
+	});
+}
+
+void ReversiGui::stopSearch()
+{
+	ai.stop();
+	if (searchThread.joinable())
+		searchThread.join();
+	busy = false;
+	hintRunning = false;
+}
+
+bool ReversiGui::isPC(int color) const
+{
+	return numPCgamers == 2 || (numPCgamers == 1 && color != humanColor);
+}
+
+void ReversiGui::showStatus(const QString& text)
+{
+	ui->MessageLabel->setText(text);
+}
+
+static QString colorName(int color)
+{
+	return color == 1 ? QStringLiteral("Schwarz") : QStringLiteral("Wei\u00DF");
+}
+
+// Nach jedem Zug: wer ist dran? Hat ein Spieler keinen Zug, setzt der andere nochmal.
+void ReversiGui::afterMove()
+{
+	posId++;          // neue Stellung: alte Tipps/Ergebnisse sind ungueltig
+	hintSquare = -1;
+	bb::clearMarkers(game.mboard);
+	bb::u64 P, O;
+	const int next = 3 - actualColor;
+	bb::load(game.mboard, next, P, O);
+	QString msg;
+	if (bb::moves(P, O))
+		actualColor = next;
+	else if (bb::moves(O, P))
+		msg = colorName(next) + QStringLiteral(" muss passen. ");
+	else
+		gameOver = true;
+
+	if (!gameOver && !isPC(actualColor))
+		game.fastfind(game.mboard, actualColor); // Marker fuer den menschlichen Spieler
+	updateBoard(gameOver);
+
+	if (gameOver)
+	{
+		game.countChips(game.mboard);
+		const int b = game.BlackChips, w = game.WhiteChips;
+		if (b > w) msg += QStringLiteral("Schwarz gewinnt ");
+		else if (w > b) msg += QStringLiteral("Wei\u00DF gewinnt ");
+		else msg += QStringLiteral("Unentschieden ");
+		msg += QString::number(b) + ":" + QString::number(w);
+		testfile << "Spielende " << b << ":" << w << std::endl;
+		showStatus(msg);
+		return;
+	}
+	if (isPC(actualColor))
+	{
+		startSearch(false);
+		if (!msg.isEmpty())
+			showStatus(msg + QStringLiteral("PC denkt ..."));
+	}
+	else
+	{
+		showStatus(msg + QStringLiteral("Du bist dran (") + colorName(actualColor) + ")." + lastPcInfo);
+		if (hintBox && hintBox->isChecked())
+			startSearch(true);
+	}
+}
+
+void ReversiGui::onSearchResult(const engine::Result& r, int id, bool hint)
+{
+	if (id != posId || gameOver)
+		return; // Ergebnis fuer eine Stellung, die es nicht mehr gibt
+	if (hint)
+	{
+		hintRunning = false;
+		if (hintBox && hintBox->isChecked() && humanToMove() && !r.stopped)
+		{
+			hintSquare = r.move;
+			updateBoard(false);
+		}
+		return;
+	}
+	if (r.move >= 0)
+	{
+		game.fastMove(game.mboard, field((int8_t)(r.move / 8), (int8_t)(r.move % 8)), (int8_t)actualColor);
+		testfile << "PC " << (int)actualColor << " Zug " << r.move / 8 << "," << r.move % 8
+			<< " Tiefe " << r.depth << " Wert " << r.score << (r.exact ? " exakt" : (r.wld ? " WLD" : ""))
+			<< " Knoten " << r.nodes << " Zeit " << r.seconds << " Threads " << r.threads << std::endl;
+		lastPcInfo = QStringLiteral("\n\nPC: Tiefe ") + QString::number(r.depth);
+		if (r.depth == 0)
+			lastPcInfo = QStringLiteral("\n\nPC: einziger Zug");
+		else if (r.exact || r.wld)
+		{
+			if (r.score > 0) lastPcInfo += QStringLiteral("\nPC gewinnt sicher");
+			else if (r.score < 0) lastPcInfo += QStringLiteral("\nPC verliert bei bestem Spiel");
+			else lastPcInfo += QStringLiteral("\nRemis bei bestem Spiel");
+		}
+		else
+			lastPcInfo += QStringLiteral("\nBewertung ") + QString::number(-r.score); // aus deiner Sicht
+	}
+	busy = false;
+	afterMove();
 }
 
 void ReversiGui::training()
@@ -114,26 +309,16 @@ void ReversiGui::training()
 	}
 }
 
-void ReversiGui::getMove(QMouseEvent * e)
+void ReversiGui::onFieldClicked(int xCoord, int yCoord)
 {
-	int xx = e->x();
-	int yy = e->y();
-	int fieldWidth = boardwidth / ((double)game.bsize);
-	int fieldHeight = boardheight / ((double)game.bsize);
-	int xCoord, yCoord;
-	for (int i=0; i<game.bsize; i++)
-	{
-		if (xx >= i*fieldWidth && xx < (i + 1)*fieldWidth)
-			xCoord = i;
-	}
-	for (int j=0; j<game.bsize; j++)
-	{
-		if (yy >= j*fieldHeight && yy < (j + 1)*fieldHeight)
-			yCoord = j;
-	}
+	if (busy || gameOver || isPC(actualColor))
+		return;
 	if (game.mboard[xCoord][yCoord] == actualColor+2)
-	{		
-		logic(field(xCoord, yCoord));
+	{
+		if (hintRunning)
+			stopSearch(); // Tipp wird nicht mehr gebraucht
+		game.fastMove(game.mboard, field((int8_t)xCoord, (int8_t)yCoord), (int8_t)actualColor);
+		afterMove();
 	}
 }
 
@@ -238,19 +423,12 @@ void ReversiGui::logic(field kandidat)
 	}
 }
 
-void ReversiGui::updateBoard(bool last)
+void ReversiGui::updateBoard(bool /*last*/)
 {
-	static int count = 0;
-	std::ostringstream evala, evalb;
-	evala << "Black: " << (int)game.mind << " " << game.eval.efield << " " << game.eval.xfield << " " << game.eval.cfield << " " << game.eval.normal << " " << game.eval.sfield << " " << game.eval.sieg << " " << game.eval.weight;
-	evalb << "White: " << (int)game2.mind << " " << game2.eval.efield << " " << game2.eval.xfield << " " << game2.eval.cfield << " " << game2.eval.normal << " " << game2.eval.sfield << " " << game2.eval.sieg << " " << game2.eval.weight;
-	cv::Mat qboard = game.paint(game.mboard, count, "update", evala.str(), evalb.str(), last);
-	count++;
-	QPixmap pixmap = QPixmap::fromImage(QImage((unsigned char*)qboard.data, qboard.cols, qboard.rows, QImage::Format_RGB888));
-	ui->boardlabel->setPixmap(pixmap);
+	ui->board->setBoard(game.mboard, hintSquare);
 	game.countChips(game.mboard);
-	ui->BlackChipsLabel->setText(QString::number(game.BlackChips));
-	ui->WhiteChipsLabel->setText(QString::number(game.WhiteChips));
+	ui->BlackChipsLabel->setText(QStringLiteral("Schwarz: ") + QString::number(game.BlackChips));
+	ui->WhiteChipsLabel->setText(QStringLiteral("Wei\u00DF: ") + QString::number(game.WhiteChips));
 }
 
 void ReversiGui::terminate()
@@ -260,6 +438,7 @@ void ReversiGui::terminate()
 
 ReversiGui::~ReversiGui()
 {
+	stopSearch();
     delete ui;
 }
 

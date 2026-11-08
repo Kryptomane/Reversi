@@ -2,6 +2,7 @@
 #include <QWidget>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QImage>
 #include "commonincludes.h"
 
 class calc
@@ -12,11 +13,11 @@ public:
 	void initBoard();
 	int instance;
 	void makespecialvectors();
-	void countChips(board m);
-	void checkInside(board m, field kandidat, int8_t& status);
-	bool eckefrei(board m, field kandidat, int8_t color);
-	int8_t checkMove(board m, field kandidat, int8_t color);
-	cv::Mat paint(board m, int nr, std::string name, std::string evalstring, std::string evalb, bool saved);
+	void countChips(const board& m);
+	void checkInside(const board& m, field kandidat, int8_t& status);
+	bool eckefrei(const board& m, field kandidat, int8_t color);
+	int8_t checkMove(const board& m, field kandidat, int8_t color);
+	QImage paint(const board& m, int nr, std::string name, std::string evalstring, std::string evalb, bool saved, int hint = -1);
 
 	doOut doMove(board& m, field kandidat, int8_t color);
 	void fastMove(board& m, field kandidat, int8_t color);
@@ -26,7 +27,7 @@ public:
 	bool pcRandomSimulation(board& m, int8_t color);
 	void montecarlo(board& m, int8_t color);
 	int silasindustries(board& m, int8_t tiefe, int8_t color);
-	int evaluation(board m, field kandidat, doOut dos, int8_t color, int8_t status);
+	int evaluation(const board& m, field kandidat, doOut dos, int8_t color, int8_t status);
 
 	void sayHello();
 	

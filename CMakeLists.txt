@@ -1,48 +1,50 @@
 cmake_minimum_required(VERSION 3.19)
-project(reversi LANGUAGES CXX)
+project(reversi VERSION 1.0 LANGUAGES CXX)
 
-# Setze den Pfad zu OpenCV, falls nicht automatisch gefunden
-set(OpenCV_DIR "C:/Tools/opencv/build/x64/vc15/lib/")
+set(CMAKE_CXX_STANDARD 20)          # std::popcount / std::countr_zero im Bitboard-Kern
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Finde OpenCV
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
-find_package(OpenCV REQUIRED)
+# Qt Widgets (Desktop und Android), Threads fuer die parallele Suche. Kein OpenCV mehr.
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Threads REQUIRED)
 
-# Stelle sicher, dass CMake automatisch MOC, UIC und RCC behandelt (optional für Qt)
 set(CMAKE_AUTOMOC ON)
-#set(CMAKE_AUTOUIC ON)
-#set(CMAKE_AUTORCC ON)
 
-# Optional: Falls du OpenCV-Includes manuell angeben musst (nicht zwingend nötig, wenn `find_package` funktioniert)
-# include_directories(${OpenCV_INCLUDE_DIRS})
+# Quell- und Header-Dateien
+file(GLOB_RECURSE source_files src/*.cpp)
+file(GLOB_RECURSE header_files include/*.h)
 
-# Füge den Pfad zu TinyLog hinzu
-SET(TINYLOG_DIR "C:/Tools/TinyLog")
-include_directories(${TINYLOG_DIR})
-
-# Quell- und Header-Dateien einfügen
-file(GLOB_RECURSE source_files src/*)
-file(GLOB_RECURSE header_files include/*)
-
-# Erstelle das Executable
 qt_add_executable(reversi WIN32
     ${source_files}
     ${header_files}
 )
 
-# Linke mit den entsprechenden Bibliotheken
-target_link_libraries(reversi PRIVATE
-    Qt6::Widgets
-    ${OpenCV_LIBS}  # OpenCV Bibliotheken
+target_include_directories(reversi PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}          # TinyLog.h liegt im Projektordner
 )
 
-target_include_directories(reversi PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(reversi PRIVATE
+    Qt6::Widgets
+    Threads::Threads
+)
 
-# Wenn du Debug-/Release-Bibliotheken spezifisch verlinken willst, kannst du das wie folgt tun:
-# IF(CMAKE_BUILD_TYPE MATCHES DEBUG)
-#     target_link_libraries(reversi PRIVATE "C:/Tools/opencv/build/x64/vc15/lib/opencv_world341d.lib")
-# ENDIF(CMAKE_BUILD_TYPE MATCHES DEBUG)
+# Android: App-Name, Paket-ID und Version (werden auf dem Desktop ignoriert)
+set_target_properties(reversi PROPERTIES
+    QT_ANDROID_APP_NAME "Reversi"
+    QT_ANDROID_PACKAGE_NAME "de.maile.reversi"
+    QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
+    QT_ANDROID_VERSION_CODE 1
+    QT_ANDROID_MIN_SDK_VERSION 28
+)
 
-# IF(CMAKE_BUILD_TYPE MATCHES RELEASE)
-#     target_link_libraries(reversi PRIVATE "C:/Tools/opencv/build/x64/vc15/lib/opencv_world341.lib")
-# ENDIF(CMAKE_BUILD_TYPE MATCHES RELEASE)
+if(NOT ANDROID)
+    # Vergleichstest + Benchmark des Zuggenerators (ohne Qt). Im Release-Build laufen lassen.
+    add_executable(movegen_test tests/movegen_test.cpp)
+    target_include_directories(movegen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+    # Engine-Test: Endspiel exakt gegen Brute-Force, Partien gegen Zufall/Gierig, Geschwindigkeit.
+    add_executable(engine_test tests/engine_test.cpp src/engine.cpp)
+    target_link_libraries(engine_test PRIVATE Threads::Threads)
+    target_include_directories(engine_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+endif()

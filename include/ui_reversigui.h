@@ -1,86 +1,82 @@
 #ifndef UI_REVERSIGUI_H
 #define UI_REVERSIGUI_H
-
 #pragma once
+// Oberflaeche mit Layouts (passt sich an Fenster- bzw. Handy-Bildschirm an):
+// oben das Brett, darunter Steinzahl, Einstellungen, Status und Knoepfe.
 
-#include <QtCore/QVariant>
-#include <QAction>
-#include <QtWidgets/QApplication>
-#include <QtWidgets/QButtonGroup>
-#include <QtWidgets/QHeaderView>
+#include <QtWidgets/QWidget>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPushButton>
-#include <QtWidgets/QWidget>
-#include "clickablehelper.h"
-
-QT_BEGIN_NAMESPACE
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QCheckBox>
+#include <QtWidgets/QBoxLayout>
+#include "boardwidget.h"
 
 class Ui_ReversiGui
 {
 public:
-	ClickableLabel *boardlabel;
-    QLabel *WhiteLabel;
-    QLabel *BlackLabel;
-    QPushButton *newGameButton;
-    QPushButton *exitGameButton;
-    QLabel *WhiteChipsLabel;
-    QLabel *BlackChipsLabel;
-	QLabel *MessageLabel;
+	BoardWidget* board;
+	QLabel* BlackChipsLabel;
+	QLabel* WhiteChipsLabel;
+	QLabel* timeLabel;
+	QComboBox* timeBox;
+	QCheckBox* hintBox;
+	QLabel* MessageLabel;
+	QPushButton* newGameButton;
+	QPushButton* exitGameButton;
 
-    void setupUi(QWidget *ReversiGui)
-    {
-        if (ReversiGui->objectName().isEmpty())
-            ReversiGui->setObjectName(QStringLiteral("ReversiGui"));
-        ReversiGui->resize(430, 320);
-        ReversiGui->setMinimumSize(QSize(430, 320));
-        boardlabel = new ClickableLabel(ReversiGui);
-        boardlabel->setObjectName(QStringLiteral("boardlabel"));
-        boardlabel->setGeometry(QRect(10, 10, 300, 300));
-        WhiteLabel = new QLabel(ReversiGui);
-        WhiteLabel->setObjectName(QStringLiteral("WhiteLabel"));
-        WhiteLabel->setGeometry(QRect(320, 10, 40, 15));
-        BlackLabel = new QLabel(ReversiGui);
-        BlackLabel->setObjectName(QStringLiteral("BlackLabel"));
-        BlackLabel->setGeometry(QRect(320, 35, 40, 15));
-        newGameButton = new QPushButton(ReversiGui);
-        newGameButton->setObjectName(QStringLiteral("newGameButton"));
-        newGameButton->setGeometry(QRect(320, 70, 100, 25));
-        exitGameButton = new QPushButton(ReversiGui);
-        exitGameButton->setObjectName(QStringLiteral("exitGameButton"));
-        exitGameButton->setGeometry(QRect(320, 110, 100, 25));
-        WhiteChipsLabel = new QLabel(ReversiGui);
-        WhiteChipsLabel->setObjectName(QStringLiteral("WhiteChipsLabel"));
-        WhiteChipsLabel->setGeometry(QRect(370, 10, 20, 15));
-        BlackChipsLabel = new QLabel(ReversiGui);
-        BlackChipsLabel->setObjectName(QStringLiteral("BlackChipsLabel"));
-        BlackChipsLabel->setGeometry(QRect(370, 35, 20, 15));
-		MessageLabel = new QLabel(ReversiGui);
-		MessageLabel->setObjectName(QStringLiteral("MessageLabel"));
-		MessageLabel->setGeometry(QRect(320, 150, 100, 25));
-        retranslateUi(ReversiGui);
+	void setupUi(QWidget* w)
+	{
+		w->setObjectName(QStringLiteral("ReversiGui"));
+		w->setWindowTitle(QStringLiteral("Reversi"));
 
-        QMetaObject::connectSlotsByName(ReversiGui);
-    } // setupUi
+		QVBoxLayout* mainLayout = new QVBoxLayout(w);
+		mainLayout->setContentsMargins(8, 8, 8, 8);
+		mainLayout->setSpacing(6);
 
-    void retranslateUi(QWidget *ReversiGui)
-    {
-        ReversiGui->setWindowTitle(QApplication::translate("ReversiGui", "ReversiGui", nullptr));
-        boardlabel->setText(QString());
-        WhiteLabel->setText(QApplication::translate("ReversiGui", "Wei\303\237", nullptr));
-        BlackLabel->setText(QApplication::translate("ReversiGui", "Schwarz", nullptr));
-        newGameButton->setText(QApplication::translate("ReversiGui", "Neues Spiel", nullptr));
-        exitGameButton->setText(QApplication::translate("ReversiGui", "Spiel beenden", nullptr));
-        WhiteChipsLabel->setText(QApplication::translate("ReversiGui", "0", nullptr));
-        BlackChipsLabel->setText(QApplication::translate("ReversiGui", "0", nullptr));
-		MessageLabel->setText(QApplication::translate("ReversiGui", "", nullptr));
-    } // retranslateUi
+		board = new BoardWidget(w);
+		mainLayout->addWidget(board, 1);
 
+		QHBoxLayout* scoreRow = new QHBoxLayout();
+		BlackChipsLabel = new QLabel(w);
+		WhiteChipsLabel = new QLabel(w);
+		QFont f = BlackChipsLabel->font();
+		f.setBold(true);
+		BlackChipsLabel->setFont(f);
+		WhiteChipsLabel->setFont(f);
+		scoreRow->addWidget(BlackChipsLabel);
+		scoreRow->addStretch(1);
+		scoreRow->addWidget(WhiteChipsLabel);
+		mainLayout->addLayout(scoreRow);
+
+		QHBoxLayout* timeRow = new QHBoxLayout();
+		timeLabel = new QLabel(QStringLiteral("Bedenkzeit PC:"), w);
+		timeBox = new QComboBox(w);
+		timeRow->addWidget(timeLabel);
+		timeRow->addWidget(timeBox);
+		timeRow->addStretch(1);
+		mainLayout->addLayout(timeRow);
+
+		hintBox = new QCheckBox(QStringLiteral("Besten Zug zeigen"), w);
+		mainLayout->addWidget(hintBox);
+
+		MessageLabel = new QLabel(w);
+		MessageLabel->setWordWrap(true);
+		MessageLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+		MessageLabel->setMinimumHeight(MessageLabel->fontMetrics().lineSpacing() * 4); // Layout springt nicht
+		mainLayout->addWidget(MessageLabel);
+
+		QHBoxLayout* buttonRow = new QHBoxLayout();
+		newGameButton = new QPushButton(QStringLiteral("Neues Spiel"), w);
+		exitGameButton = new QPushButton(QStringLiteral("Beenden"), w);
+		buttonRow->addWidget(newGameButton);
+		buttonRow->addWidget(exitGameButton);
+		mainLayout->addLayout(buttonRow);
+	}
 };
 
 namespace Ui {
-    class ReversiGui: public Ui_ReversiGui {};
-} // namespace Ui
-
-QT_END_NAMESPACE
+	class ReversiGui : public Ui_ReversiGui {};
+}
 
 #endif // UI_REVERSIGUI_H

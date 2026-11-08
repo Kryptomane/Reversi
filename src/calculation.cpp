@@ -1,12 +1,13 @@
 #include "calculation.h"
+#include "boardwidget.h"
+#include "apppaths.h"
+#include <QPainter>
 
 calc::calc(int number)
 {
-	bsize = 8;
-	mboard.resize(bsize);
-	for (int8_t i = 0; i < mboard.size(); i++)
-		mboard[i].resize(bsize);
+	bsize = BSIZE; // Bitboard-Kern ist fest auf 8x8
 	instance = number;
+	exportDirectory = logDirectory();
 	makeNewLog();
 	initBoard();
 	makespecialvectors();
@@ -67,7 +68,7 @@ void calc::sayHello()
 	testfile << " " << std::endl;
 }
 
-void calc::checkInside(board m, field kandidat, int8_t & status)
+void calc::checkInside(const board& m, field kandidat, int8_t & status)
 {
 	status = 0;
 	int8_t stx = std::max(0, kandidat.x - 1);
@@ -102,151 +103,20 @@ void calc::checkInside(board m, field kandidat, int8_t & status)
 	}
 }
 
-void calc::countChips(board m)
+void calc::countChips(const board& m)
 {
-	WhiteChips = 0; BlackChips = 0;
-	for (int8_t i=0; i<m.size(); i++)
-	{
-		for (int8_t j=0; j<m[0].size(); j++)
-		{ 
-			if (m[i][j] == 1)
-				BlackChips++;
-			if (m[i][j] == 2)
-				WhiteChips++;
-		}
-	}
+	bb::countChips(m, BlackChips, WhiteChips);
 }
 
+// Zuggenerator: Bitboard-Kern in reversi_core.h (Vergleichstest: tests/movegen_test.cpp)
 void calc::fastMove(board& m, field kandidat, int8_t color)
 {
-	m[kandidat.x][kandidat.y] = color;
-	std::vector<field> line;
-	int8_t sti = std::max(0, kandidat.x - 1);
-	int8_t stj = std::max(0, kandidat.y - 1);
-	int8_t fii = std::min(kandidat.x + 1, bsize - 1);
-	int8_t fij = std::min(kandidat.y + 1, bsize - 1);
-	for (int8_t i = sti; i <= fii; i++)
-	{
-		for (int8_t j = stj; j <= fij; j++)
-		{
-			bool lineswitch = false;
-			if (m[i][j] == 3 - color)
-			{
-				line.push_back(field(i, j));
-				bool abbruch = false;
-				int8_t ri = i - kandidat.x;
-				int8_t rj = j - kandidat.y;
-				int8_t laufx = i + ri;
-				int8_t laufy = j + rj;
-				for (; abbruch == false; )
-				{
-					if (laufx < 0 || laufx >= bsize || laufy < 0 || laufy >= bsize)
-					{
-						abbruch = true;
-					}
-					else
-					{
-						if (m[laufx][laufy] == 3 - color) //laufe
-						{
-							line.push_back(field(laufx, laufy));
-						}
-						if (m[laufx][laufy] == color) // eigener Stein
-						{
-							abbruch = true;
-							lineswitch = true;
-						}
-						if (m[laufx][laufy] != color && m[laufx][laufy] != 3 - color) //anderes Feld
-						{
-							abbruch = true;
-						}
-						laufx += ri;
-						laufy += rj;
-					}
-				
-				}
-			}
-			if (lineswitch)
-			{
-				for (int8_t k = 0; k < line.size(); k++)
-				{
-					m[line[k].x][line[k].y] = color;
-				}
-			}
-			line.erase(line.begin(), line.end());
-		}
-	}
+	bb::fastMove(m, kandidat, color);
 }
 
 doOut calc::doMove(board& m, field kandidat, int8_t color)
 {
-	doOut a;
-	a.Half = 0;
-	a.In = 0;
-	a.Out = 0;
-	std::vector<field> line;
-	std::vector<field> change;
-	change.push_back(kandidat);
-	int8_t sti = std::max(0, kandidat.x - 1);
-	int8_t stj = std::max(0, kandidat.y - 1);
-	int8_t fii = std::min(kandidat.x + 1, bsize - 1);
-	int8_t fij = std::min(kandidat.y + 1, bsize - 1);
-	for (int8_t i = sti; i <= fii; i++)
-	{
-		for (int8_t j = stj; j <= fij; j++)
-		{
-			bool lineswitch = false;
-			if (m[i][j] == 3 - color)
-			{
-				line.push_back(field(i, j));
-				bool abbruch = false;
-				int8_t ri = i - kandidat.x;
-				int8_t rj = j - kandidat.y;
-				int8_t laufx = i + ri;
-				int8_t laufy = j + rj;
-				for (; abbruch == false;)
-				{
-					if (laufx < 0 || laufx >= bsize || laufy < 0 || laufy >= bsize)
-						abbruch = true;
-					else
-					{
-						if (m[laufx][laufy] == 3 - color) //laufe
-						{
-							line.push_back(field(laufx, laufy));
-						}
-						if (m[laufx][laufy] == color) // eigener Stein
-						{
-							abbruch = true;
-							lineswitch = true;
-						}
-						if (m[laufx][laufy] != color && m[laufx][laufy] != 3-color) //anderes Feld
-						{
-							abbruch = true;
-						}
-						laufx += ri;
-						laufy += rj;
-					}
-				}
-			}
-			if (lineswitch)
-			{
-				change.insert(change.end(), line.begin(), line.end());
-			}
-			line.erase(line.begin(), line.end());
-		}
-	}
-	int8_t status;
-	for (int8_t i = 0; i < change.size(); i++)
-	{
-		m[change[i].x][change[i].y] = color;
-		checkInside(m, change[i], status);
-		if (status == 2)
-			a.In++;
-		if (status == 1)
-			a.Half++;
-		if (status == 0)
-			a.Out++;
-	}
-	
+	doOut a = bb::doMove(m, kandidat, color);
 	if (debug)
 	{
 		static int blabla = 0;
@@ -260,196 +130,49 @@ doOut calc::doMove(board& m, field kandidat, int8_t color)
 
 findOut calc::findMove(board& m, int8_t color)
 {
-	for (int8_t i = 0; i < bsize; i++)
-		for (int8_t j = 0; j < bsize; j++)
-			if (m[i][j] != 1 && m[i][j] != 2)
-				m[i][j] = 0;	
-	findOut a;
-	for (int8_t xx = 0; xx < bsize; xx++)
-	{
-		for (int8_t yy = 0; yy < bsize; yy++)
-		{
-			if (m[xx][yy] == color)
-			{
-				//testfile << "Finde Züge für" << xx << " " << yy << std::endl;
-				int8_t stx = std::max(0, xx - 1);
-				int8_t sty = std::max(0, yy - 1);
-				int8_t fix = std::min(xx + 1, bsize - 1);
-				int8_t fiy = std::min(yy + 1, bsize - 1);
-				for (int8_t i = stx; i <= fix; i++)
-				{
-					for (int8_t j = sty; j <= fiy; j++)
-					{
-						if (m[i][j] == 3 - color)
-						{
-							//testfile << "Fremder Stein bei " << i << " " << j << std::endl;
-							bool abbruch = false;
-							int8_t rx = i - xx;
-							int8_t ry = j - yy;
-							int8_t laufx = i + rx;
-							int8_t laufy = j + ry;
-							for (int8_t k = 2; abbruch == false; k++)
-							{
-								if (laufx < 0 || laufx >= bsize || laufy < 0 || laufy >= bsize)
-									abbruch = true;
-								else
-								{
-									if (m[laufx][laufy] == color) // eigener Stein
-									{
-										abbruch = true;
-									}
-									if (m[laufx][laufy] == 0 || m[laufx][laufy] == 3-color+2) // freies feld
-									{
-										abbruch = true;
-										m[laufx][laufy] = color + 2;
-										int8_t status = checkMove(m, field(laufx, laufy), color);
-										if (status == 4)
-										{
-											a.sField.push_back(field(laufx, laufy));
-										}
-										if (status == 1)
-										{
-											a.cField.push_back(field(laufx, laufy));
-										}
-										if (status == 2)
-										{
-											a.xField.push_back(field(laufx, laufy));
-										}
-										if (status == 3)
-										{
-											a.eField.push_back(field(laufx, laufy));
-										}
-										if (status == 0)
-										{
-											a.Normal.push_back(field(laufx, laufy));
-										}
-										a.Ges.push_back(field(laufx, laufy));
-										a.status.push_back(status);
-									}
-									if (m[laufx][laufy] == color + 2)
-									{
-										abbruch = true;
-									}
-									laufx += rx;
-									laufy += ry;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return a;
+	return bb::findMove(m, color);
 }
 
 std::vector<field> calc::fastfind(board& m, int8_t color)
 {
-	std::vector<field> erg;
-	for (int8_t i = 0; i < bsize; i++)
-		for (int8_t j = 0; j < bsize; j++)
-			if (m[i][j] != 1 && m[i][j] != 2)
-				m[i][j] = 0;
-	for (int8_t xx = 0; xx < bsize; xx++)
-	{
-		for (int8_t yy = 0; yy < bsize; yy++)
-		{
-			if (m[xx][yy] == color)
-			{
-				int8_t stx = std::max(0, xx - 1);
-				int8_t sty = std::max(0, yy - 1);
-				int8_t fix = std::min(xx + 1, bsize - 1);
-				int8_t fiy = std::min(yy + 1, bsize - 1);
-				for (int8_t i = stx; i <= fix; i++)
-				{
-					for (int8_t j = sty; j <= fiy; j++)
-					{
-						if (m[i][j] == 3 - color)
-						{
-							bool abbruch = false;
-							int8_t rx = i - xx;
-							int8_t ry = j - yy;
-							int8_t laufx = i + rx;
-							int8_t laufy = j + ry;
-							for (; abbruch == false; )
-							{
-								if (laufx < 0 || laufx >= bsize || laufy < 0 || laufy >= bsize)
-									abbruch = true;
-								else
-								{
-									if (m[laufx][laufy] == color) // eigener Stein
-									{
-										abbruch = true;
-									}
-									if (m[laufx][laufy] == 0 || m[laufx][laufy] == 5 - color) // freies feld
-									{
-										abbruch = true;
-										m[laufx][laufy] = color + 2;
-										erg.push_back(field(laufx, laufy));
-									}
-									if (m[laufx][laufy] == color + 2)
-									{
-										abbruch = true;
-									}
-									laufx += rx;
-									laufy += ry;
-								}
-								
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return erg;
+	return bb::fastfind(m, color);
 }
 
+// Zufallspartie komplett auf Bitboards; das Endbrett wird nach m zurueckgeschrieben.
 bool calc::pcRandomSimulation(board& m, int8_t color)
 {
-	bool ende = false;
-	double findtime, dotime;
-	for (; !ende;)
+	double simtime = clock();
+	bb::u64 P, O; // P = Spieler am Zug (color), O = Gegner
+	bb::load(m, color, P, O);
+	for (;;)
 	{
-		findtime = clock();
-		std::vector<field> res = fastfind(m, color);
-		findtime = (clock() - findtime) / CLOCKS_PER_SEC;
-		reff += findtime;
-		if (res.size() > 0)
+		bb::u64 mv = bb::moves(P, O);
+		if (!mv)
 		{
-			int8_t ran = rand() % res.size();
-			dotime = clock();
-			fastMove(m, res[ran], color);
-			dotime = (clock() - dotime) / CLOCKS_PER_SEC;
-			refd += dotime;
+			// Passen: Gegner ist am Zug. Kann der auch nicht, ist das Spiel aus.
+			if (!bb::moves(O, P))
+				break;
+			std::swap(P, O);
 			color = 3 - color;
+			continue;
 		}
-		else
-		{
-			findtime = clock();
-			std::vector<field> res = fastfind(m, 3-color);
-			findtime = (clock() - findtime) / CLOCKS_PER_SEC;
-			reff += findtime;
-			if (res.size() == 0)
-			{
-				ende = true;
-			}
-			else
-			{
-				int8_t ran = rand() % res.size();
-				dotime = clock();
-				fastMove(m, res[ran], 3-color);
-				dotime = (clock() - dotime) / CLOCKS_PER_SEC;
-				refd += dotime;
-				color = 3 - color;
-			}
-		}
+		for (int ran = rand() % bb::popcount(mv); ran > 0; ran--)
+			mv &= mv - 1;
+		const bb::u64 mbit = mv & (0 - mv);
+		const bb::u64 f = bb::flips(P, O, mbit);
+		P |= f | mbit;
+		O &= ~f;
+		std::swap(P, O);
+		color = 3 - color;
 	}
-	countChips(m);
-	if (WhiteChips > BlackChips)
-		return true;
-	else
-		return false;
+	const bb::u64 black = (color == 1) ? P : O;
+	const bb::u64 white = (color == 1) ? O : P;
+	for (int k = 0; k < 64; k++)
+		m.c[k / 8][k % 8] = (black >> k & 1) ? 1 : ((white >> k & 1) ? 2 : 0);
+	BlackChips = (int8_t)bb::popcount(black);
+	WhiteChips = (int8_t)bb::popcount(white);
+	reff += (clock() - simtime) / CLOCKS_PER_SEC;
+	return WhiteChips > BlackChips;
 }
 
 //1 == schwarz == mensch
@@ -584,7 +307,7 @@ int calc::silasindustries(board& m, int8_t tiefe, int8_t color)
 	}
 }
 
-bool calc::eckefrei(board m, field kandidat, int8_t color)
+bool calc::eckefrei(const board& m, field kandidat, int8_t color)
 {
 	for (int8_t i = std::max(0, kandidat.x - 1); i <= std::min(kandidat.x + 1, bsize - 1); i++)
 	{
@@ -600,7 +323,7 @@ bool calc::eckefrei(board m, field kandidat, int8_t color)
 	return true;
 }
 
-int8_t calc::checkMove(board m, field kandidat, int8_t color)
+int8_t calc::checkMove(const board& m, field kandidat, int8_t color)
 {
 	if (kandidat.x == 0 || kandidat.x == bsize - 1)
 	{
@@ -630,7 +353,7 @@ int8_t calc::checkMove(board m, field kandidat, int8_t color)
 	return 0;
 }
 
-int calc::evaluation(board m, field kandidat, doOut dos, int8_t color, int8_t special)
+int calc::evaluation(const board& m, field kandidat, doOut dos, int8_t color, int8_t special)
 {
 	int evalint = 0;
 	//int8_t special = checkMove(m, kandidat, color);
@@ -654,48 +377,24 @@ int calc::evaluation(board m, field kandidat, doOut dos, int8_t color, int8_t sp
 	return evalint;
 }
 
-cv::Mat calc::paint(board m, int nr, std::string name, std::string evalstring, std::string evalb, bool saved)
+// Brett als Bild (fuer Debug-Ausgaben); die GUI zeichnet direkt im BoardWidget.
+QImage calc::paint(const board& m, int nr, std::string name, std::string evalstring, std::string evalb, bool saved, int hint)
 {
-	int groesse = 600;
-	int karl = groesse / bsize;
-	cv::Mat Bert = cv::Mat(groesse, groesse, CV_8UC3);
-	cv::rectangle(Bert, cv::Rect(0, 0, groesse, groesse), cv::Scalar(0, 180, 0), -1);
-	int halfsize = groesse / (2 * (double)bsize);
-	int coinsize = 1.6*(double)halfsize;
-	int offset = (groesse - (bsize*karl)) / 2;
-	for (int i = 0; i < bsize; i++)
-	{
-		for (int j = 0; j < bsize; j++)
-		{
-			if (m[i][j] == 1)
-			{
-				int xx = (i * 2 + 1)*halfsize;
-				int yy = (j * 2 + 1)*halfsize;
-				cv::rectangle(Bert, cv::Rect(offset + xx - coinsize / 2, yy - coinsize / 2, coinsize, coinsize), cv::Scalar(0, 0, 0), -1);
-			}
-			if (m[i][j] == 2)
-			{
-				int xx = (i * 2 + 1)*halfsize;
-				int yy = (j * 2 + 1)*halfsize;
-				cv::rectangle(Bert, cv::Rect(offset+ xx - coinsize / 2, yy - coinsize / 2, coinsize, coinsize), cv::Scalar(255, 255, 255), -1);
-			}
-			if (m[i][j] == 3 || m[i][j] == 4)
-			{
-				int xx = (i * 2 + 1)*halfsize;
-				int yy = (j * 2 + 1)*halfsize;
-				cv::rectangle(Bert, cv::Rect(offset+xx - coinsize / 6, yy - coinsize / 6, coinsize / 3, coinsize / 3), cv::Scalar(150, 0, 0), -1);
-			}
-		}
-	}
+	const int groesse = 600;
+	QImage img(groesse, groesse, QImage::Format_RGB32);
+	QPainter p(&img);
+	drawBoard(p, QRectF(0, 0, groesse, groesse), m, hint);
 	if (saved)
 	{
+		p.setPen(Qt::red);
+		p.drawText(30, 200, QString::fromStdString(evalstring));
+		p.drawText(30, 250, QString::fromStdString(evalb));
+		p.end();
 		std::ostringstream bla;
-		cv::putText(Bert, evalstring, cv::Point(30, 200), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(0, 0, 255));
-		cv::putText(Bert, evalb, cv::Point(30, 250), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(0, 0, 255));
 		bla << name << "_" << instance << "_" << nr << ".png";
-		cv::imwrite(bla.str(), Bert);
+		img.save(exportDirectory + QString::fromStdString(bla.str()));
 	}
-	return Bert;
+	return img;
 }
 
 calc::~calc()
