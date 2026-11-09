@@ -112,7 +112,7 @@ namespace engine
 			const int d = 2 * popcount(P) - 63; // Differenz P - O ohne das freie Feld
 			if (u64 f = flips(P, O, m)) return finalScore(d + 2 * popcount(f) + 1, 0);
 			if (u64 f = flips(O, P, m)) return finalScore(d - 2 * popcount(f) - 1, 0); // P passt, O setzt
-			return finalScore(d, 1);                                                    // keiner kann setzen
+            return finalScore(d, 1);                                                    // keiner kann setzen
 		}
 
 		// Exakte Rechnung fuer die letzten Felder (Paritaets-Sortierung, keine Tabelle).

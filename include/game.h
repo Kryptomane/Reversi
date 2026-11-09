@@ -13,8 +13,15 @@ public:
 	// Was nach einem Zug passiert: der Gegner ist dran, der Gegner muss passen, oder das Spiel ist aus.
 	enum class Turn { Next, OpponentPasses, Over };
 
+	struct StartOptions
+	{
+		bool swappedCenter = false;   // Mittelsteine farblich vertauscht (Schwarz auf d4/e5)
+		Color first = Color::Black;   // wer den ersten Zug macht
+	};
+
 	Game() { reset(); }
-	void reset();
+	void reset() { reset(StartOptions()); } // Standard: normale Startstellung, Schwarz beginnt
+	void reset(const StartOptions& options);
 
 	Color toMove() const { return s.current; }
 	bool isOver() const { return s.over; }

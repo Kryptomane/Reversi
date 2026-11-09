@@ -1,8 +1,10 @@
 #include "game.h"
 
-void Game::reset()
+void Game::reset(const StartOptions& options)
 {
-	s = State{ bb::START_BLACK, bb::START_WHITE, Color::Black, false };
+	const bb::u64 black = options.swappedCenter ? bb::START_WHITE : bb::START_BLACK;
+	const bb::u64 white = options.swappedCenter ? bb::START_BLACK : bb::START_WHITE;
+	s = State{ black, white, options.first, false };
 	history.clear();
 }
 

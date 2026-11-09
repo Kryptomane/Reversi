@@ -3,6 +3,7 @@
 // und kann das Umdrehen der Steine animieren.
 #include <QWidget>
 #include "bitboard.h"
+#include <vector>
 
 class QVariantAnimation;
 
@@ -12,8 +13,8 @@ struct BoardState
 	bb::u64 black = 0, white = 0;
 	bb::u64 markers = 0;              // Felder mit Zugpunkt
 	int hint = -1;                    // Zugvorschlag (gelber Rahmen), -1 = keiner
-	int lastMove = -1;                // Zug des Gegners (roter Rahmen), -1 = keiner
-	bb::u64 lastFlipped = 0;          // dabei umgedrehte Steine (oranger Rahmen)
+	std::vector<int> lastMoves;       // Zug/Zuege des Gegners (rote Ringe); mehrere = nummeriert 1, 2, 3 ...
+	bb::u64 lastFlipped = 0;          // umgedrehte Steine (orange Ringe), nur bei einem einzelnen Zug
 };
 
 class BoardWidget : public QWidget

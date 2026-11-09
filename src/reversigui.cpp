@@ -44,15 +44,23 @@ ReversiGui::~ReversiGui()
 
 // ======================= Ablauf =======================
 
+// Dialog mit Startoptionen; laeuft eine Partie, wird zusaetzlich darauf hingewiesen.
 void ReversiGui::requestNewGame()
 {
-	if (!gameInProgress())
-	{
+	QSettings settings;
+	MessageOverlay::Message m;
+	m.title = QStringLiteral("Neues Spiel");
+	if (gameInProgress())
+		m.detail = QStringLiteral("Die laufende Partie geht verloren.");
+	m.yesText = QStringLiteral("Starten");
+	m.options = { { QStringLiteral("Startstellung tauschen"), settings.value("swapStart", false).toBool() },
+	              { QStringLiteral("Wei\u00DF beginnt"), settings.value("whiteBegins", false).toBool() } };
+	overlay->show(m, [this]() {
+		QSettings s;
+		s.setValue("swapStart", overlay->isOptionChecked(0));
+		s.setValue("whiteBegins", overlay->isOptionChecked(1));
 		startNewGame();
-		return;
-	}
-	overlay->show({ QStringLiteral("Neues Spiel starten?"), QStringLiteral("Die laufende Partie geht verloren."),
-	                QStringLiteral("Neues Spiel") }, [this]() { startNewGame(); });
+	});
 }
 
 void ReversiGui::requestColorSwap()
@@ -69,8 +77,7 @@ void ReversiGui::swapColors()
 	stopSearch();
 	computerColor = opponent(computerColor);
 	QSettings().setValue("computerColor", computerColor == Color::Black ? 0 : 1);
-	framedMove = -1;
-	framedFlips = 0;
+	clearFrames();
 	if (!game.isOver())
 		handleTurn(Game::Turn::Next);
 	else
@@ -94,17 +101,20 @@ void ReversiGui::showGameOver()
 		else
 			title = isComputer(b > w ? Color::Black : Color::White) ? QStringLiteral("Weiter \u00FCben ;)") : QStringLiteral("Gl\u00FCckwunsch!");
 		overlay->show({ title, score, QStringLiteral("Neues Spiel"), QStringLiteral("Zur\u00FCck zum Spiel"), true },
-		              [this]() { startNewGame(); });
+		              [this]() { requestNewGame(); }); // Dialog mit Startoptionen
 	});
 }
 
 void ReversiGui::startNewGame()
 {
 	stopSearch();
-	game.reset();
+	QSettings settings; // Startoptionen aus dem "Neues Spiel"-Dialog
+	Game::StartOptions start;
+	start.swappedCenter = settings.value("swapStart", false).toBool();
+	start.first = settings.value("whiteBegins", false).toBool() ? Color::White : Color::Black;
+	game.reset(start);
 	ai.clear();
-	framedMove = -1;
-	framedFlips = 0;
+	clearFrames();
 	handleTurn(Game::Turn::Next);
 }
 
@@ -129,8 +139,7 @@ void ReversiGui::undoMove()
 	do
 		game.undo();
 	while (game.canUndo() && isComputer(game.toMove()));
-	framedMove = -1;
-	framedFlips = 0;
+	clearFrames();
 	handleTurn(Game::Turn::Next);
 }
 
@@ -243,12 +252,29 @@ void ReversiGui::applyComputerMove(const engine::Result& r)
 	handleTurn(playAndRemember(r.move, true));
 }
 
+// Zieht derselbe Spieler mehrmals hintereinander (der andere musste passen), werden seine Zuege
+// nummeriert gesammelt; die orangen Ringe gibt es nur bei einem einzelnen Zug.
 Game::Turn ReversiGui::playAndRemember(int square, bool showFrames)
 {
-	framedMove = showFrames ? square : -1;
-	framedFlips = showFrames ? bb::flips(game.own(), game.opponentDiscs(), 1ULL << square) : 0;
+	const Color mover = game.toMove();
+	if (!showFrames)
+		clearFrames();
+	else
+	{
+		if (framedMoves.empty() || framedMover != mover)
+			framedMoves.clear();
+		framedMoves.push_back(square);
+		framedMover = mover;
+		framedFlips = framedMoves.size() == 1 ? bb::flips(game.own(), game.opponentDiscs(), 1ULL << square) : 0;
+	}
 	animateNextUpdate = true;
 	return game.play(square);
+}
+
+void ReversiGui::clearFrames()
+{
+	framedMoves.clear();
+	framedFlips = 0;
 }
 
 void ReversiGui::offerHint(const engine::Result& r)
@@ -382,8 +408,7 @@ void ReversiGui::onModeChanged()
 	QSettings().setValue("mode", (int)mode);
 	ui->levelBox->setEnabled(mode == Mode::VsComputer);
 	stopSearch();
-	framedMove = -1;
-	framedFlips = 0;
+	clearFrames();
 	handleTurn(Game::Turn::Next);
 }
 
@@ -416,7 +441,7 @@ void ReversiGui::updateView()
 	s.white = game.discs(Color::White);
 	s.markers = humanToMove() ? game.legalMoves() : 0;
 	s.hint = hintSquare;
-	s.lastMove = framedMove;
+	s.lastMoves = framedMoves;
 	s.lastFlipped = framedFlips;
 	ui->board->setState(s, animateNextUpdate && ui->animateBox->isChecked());
 	animateNextUpdate = false;

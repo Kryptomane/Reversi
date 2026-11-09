@@ -34,7 +34,7 @@ private:
 	static constexpr int EVAL_FULL_SCALE = 1500; // ab hier ist das Vergleichszeichen maximal gross (~4 Ecken)
 
 	// Ablauf
-	void requestNewGame();                     // laeuft eine Partie, erst nachfragen
+	void requestNewGame();                     // Dialog: Startstellung tauschen, Weiss beginnt
 	void startNewGame();
 	void requestColorSwap();                   // Mensch uebernimmt die andere Farbe (nach Rueckfrage)
 	void swapColors();
@@ -48,7 +48,8 @@ private:
 	void onSearchProgress(const engine::Result& r, int forPosition, SearchKind kind);
 	void onSearchResult(const engine::Result& r, int forPosition, SearchKind kind);
 	void applyComputerMove(const engine::Result& r);
-	Game::Turn playAndRemember(int square, bool showFrames); // setzt; merkt Zug + umgedrehte Steine fuer die Rahmen
+	Game::Turn playAndRemember(int square, bool showFrames); // setzt; merkt Zug + umgedrehte Steine fuer die Ringe
+	void clearFrames();
 	void offerHint(const engine::Result& r);   // erst nach HINT_DELAY_MS anzeigen (springt sonst stark)
 	void showHint(const engine::Result& r);
 	void stopSearch();
@@ -101,8 +102,9 @@ private:
 	QElapsedTimer hintClock;       // seit wann der Tipp rechnet
 	engine::Result pendingHint;    // bester Vorschlag aus der ersten Sekunde
 	bool hintPending = false;
-	int framedMove = -1;           // roter Rahmen: Zug des PCs (bzw. im 2-Spieler-Modus der letzte Zug)
-	bb::u64 framedFlips = 0;       // oranger Rahmen: dabei umgedrehte Steine
+	std::vector<int> framedMoves;  // rote Ringe: Zug/Zuege des PCs (zu zweit: des letzten Spielers) in Folge
+	Color framedMover = Color::Black;
+	bb::u64 framedFlips = 0;       // orange Ringe: umgedrehte Steine (nur bei einem einzelnen Zug)
 	bool animateNextUpdate = false;
 	QString passInfo;              // z. B. "Weiss muss passen. "
 	bool quitConfirmed = false;

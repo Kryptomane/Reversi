@@ -1,6 +1,7 @@
 #include "messageoverlay.h"
 #include <QLabel>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QBoxLayout>
 #include <QFrame>
 #include <QPainter>
@@ -13,7 +14,7 @@ MessageOverlay::MessageOverlay(QWidget* parent) : QWidget(parent)
 	// feste Farben: lesbar in hellem und dunklem Design
 	setStyleSheet(QStringLiteral(
 		"QFrame#messagePanel { background: #fafafa; border-radius: 14px; }"
-		"QFrame#messagePanel QLabel { color: #202020; }"
+		"QFrame#messagePanel QLabel, QFrame#messagePanel QCheckBox { color: #202020; }"
 		"QPushButton#messageNo { background: #757575; }"
 		"QPushButton#messageNo:pressed { background: #505050; }"));
 
@@ -46,6 +47,9 @@ MessageOverlay::MessageOverlay(QWidget* parent) : QWidget(parent)
 	panelLayout->addStretch(1);
 	panelLayout->addWidget(titleLabel);
 	panelLayout->addWidget(detailLabel);
+	optionLayout = new QVBoxLayout();
+	optionLayout->setSpacing(4);
+	panelLayout->addLayout(optionLayout);
 	panelLayout->addStretch(1);
 	panelLayout->addLayout(buttons);
 
@@ -75,6 +79,19 @@ void MessageOverlay::show(const Message& m, std::function<void()> onYes)
 	noButton->setText(m.noText);
 	yesAction = std::move(onYes);
 
+	for (QCheckBox* box : optionBoxes)
+		box->deleteLater();
+	optionBoxes.clear();
+	const int touch = (int)(QFontMetrics(font()).height() * 2.0);
+	for (const auto& [text, checked] : m.options)
+	{
+		QCheckBox* box = new QCheckBox(text, this);
+		box->setChecked(checked);
+		box->setMinimumHeight(touch);
+		optionLayout->addWidget(box);
+		optionBoxes.push_back(box);
+	}
+
 	// Vollflaechig: Kasten fuellt das Fenster, Titel deutlich groesser
 	const int margin = m.fullScreen ? 12 : 24;
 	outer->setContentsMargins(margin, margin, margin, margin);
@@ -92,6 +109,11 @@ void MessageOverlay::show(const Message& m, std::function<void()> onYes)
 	setGeometry(parentWidget()->rect());
 	raise();
 	QWidget::show();
+}
+
+bool MessageOverlay::isOptionChecked(int index) const
+{
+	return index >= 0 && index < (int)optionBoxes.size() && optionBoxes[index]->isChecked();
 }
 
 void MessageOverlay::cancel()

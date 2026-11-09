@@ -62,6 +62,22 @@ namespace
 		p.drawEllipse(cellCenter(r, cell, square), 0.45 * cell, 0.45 * cell);
 	}
 
+	// Kleines rotes Abzeichen mit Nummer oben rechts am Feld (Reihenfolge mehrerer Zuege).
+	void drawMoveNumber(QPainter& p, const QRectF& r, double cell, int square, int number)
+	{
+		const QPointF c = cellCenter(r, cell, square) + QPointF(0.33 * cell, -0.33 * cell);
+		const double radius = 0.16 * cell;
+		p.setPen(Qt::NoPen);
+		p.setBrush(LAST_MOVE_RED);
+		p.drawEllipse(c, radius, radius);
+		QFont f = p.font();
+		f.setBold(true);
+		f.setPixelSize(std::max(8, (int)(0.22 * cell)));
+		p.setFont(f);
+		p.setPen(Qt::white);
+		p.drawText(QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius), Qt::AlignCenter, QString::number(number));
+	}
+
 	void drawSquareFrame(QPainter& p, const QRectF& r, double cell, int square, const QColor& color)
 	{
 		const double inset = 0.06 * cell;
@@ -146,8 +162,11 @@ void BoardWidget::paintEvent(QPaintEvent*)
 	drawMarkers(p, r, cell, m_state.markers);
 	for (bb::u64 f = m_state.lastFlipped; f; f &= f - 1)
 		drawStoneRing(p, r, cell, bb::lsb(f), FLIPPED_ORANGE);
-	if (m_state.lastMove >= 0)
-		drawStoneRing(p, r, cell, m_state.lastMove, LAST_MOVE_RED);
+	for (int square : m_state.lastMoves)
+		drawStoneRing(p, r, cell, square, LAST_MOVE_RED);
+	if (m_state.lastMoves.size() > 1)
+		for (size_t i = 0; i < m_state.lastMoves.size(); i++)
+			drawMoveNumber(p, r, cell, m_state.lastMoves[i], (int)i + 1);
 	if (m_state.hint >= 0)
 		drawSquareFrame(p, r, cell, m_state.hint, HINT_YELLOW);
 

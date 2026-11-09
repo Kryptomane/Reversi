@@ -3,10 +3,13 @@
 // nativer Dialog nicht zuverlaessig erscheint): abgedunkelter Hintergrund, Text, zwei grosse Knoepfe.
 #include <QWidget>
 #include <functional>
+#include <vector>
+#include <utility>
 
 class QLabel;
 class QPushButton;
 class QBoxLayout;
+class QCheckBox;
 
 class MessageOverlay : public QWidget
 {
@@ -20,6 +23,7 @@ public:
 		QString yesText;                        // rechter (gruener) Knopf
 		QString noText = QStringLiteral("Abbrechen");
 		bool fullScreen = false;                // Kasten fuellt das ganze Fenster (z. B. Spielende)
+		std::vector<std::pair<QString, bool>> options; // optionale Ankreuzfelder (Text, Startwert)
 	};
 
 	explicit MessageOverlay(QWidget* parent);
@@ -28,6 +32,7 @@ public:
 	void show(const Message& m, std::function<void()> onYes);
 	void cancel();
 	bool isOpen() const { return isVisible(); }
+	bool isOptionChecked(int index) const;      // Zustand der Ankreuzfelder nach "Ja"
 
 protected:
 	bool eventFilter(QObject* watched, QEvent* e) override; // Groesse an das Elternfenster anpassen
@@ -38,6 +43,8 @@ private:
 	QBoxLayout* outer;
 	QLabel* titleLabel;
 	QLabel* detailLabel;
+	QBoxLayout* optionLayout;
+	std::vector<QCheckBox*> optionBoxes;
 	QPushButton* yesButton;
 	QPushButton* noButton;
 	std::function<void()> yesAction;
