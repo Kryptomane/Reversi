@@ -7,6 +7,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QDebug>
+#include <cstdlib>
 
 ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui)
 {
@@ -22,6 +23,7 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 
 	connect(ui->board, &BoardWidget::fieldClicked, this, &ReversiGui::onFieldClicked);
 	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::startNewGame);
+	connect(ui->undoButton, &QPushButton::clicked, this, &ReversiGui::undoMove);
 	connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::quit);
 	connect(ui->hintBox, &QCheckBox::toggled, this, &ReversiGui::onHintToggled);
 	connect(ui->animateBox, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("animate", on); });
@@ -33,6 +35,7 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 ReversiGui::~ReversiGui()
 {
 	stopSearch();
+	stopAnalysis();
 	delete ui;
 }
 
@@ -43,7 +46,6 @@ void ReversiGui::startNewGame()
 	stopSearch();
 	game.reset();
 	ai.clear();
-	lastResultInfo.clear();
 	framedMove = -1;
 	framedFlips = 0;
 	handleTurn(Game::Turn::Next);
@@ -60,6 +62,21 @@ void ReversiGui::onFieldClicked(int x, int y)
 	handleTurn(playAndRemember(square, mode == Mode::TwoPlayers));
 }
 
+// Gegen den PC wird zurueckgenommen, bis wieder der Mensch am Zug ist: also der letzte PC-Zug
+// (bzw. beide, wenn der Mensch passen musste) und der letzte eigene Zug. Zu zweit genau ein Zug.
+void ReversiGui::undoMove()
+{
+	if (!game.canUndo())
+		return;
+	stopSearch();
+	do
+		game.undo();
+	while (game.canUndo() && isComputer(game.toMove()));
+	framedMove = -1;
+	framedFlips = 0;
+	handleTurn(Game::Turn::Next);
+}
+
 void ReversiGui::handleTurn(Game::Turn turn)
 {
 	positionId++;
@@ -69,9 +86,12 @@ void ReversiGui::handleTurn(Game::Turn turn)
 
 	if (game.isOver())
 	{
+		stopAnalysis();
+		showFinalEvaluation();
 		showStatus(gameOverText());
 		return;
 	}
+	startAnalysis();
 	passInfo = turn == Game::Turn::OpponentPasses
 		? colorName(opponent(game.toMove())) + QStringLiteral(" muss passen. ") : QString();
 
@@ -82,7 +102,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 	}
 	else
 	{
-		showStatus(passInfo + yourTurnText() + lastResultInfo);
+		showStatus(passInfo + yourTurnText());
 		if (ui->hintBox->isChecked())
 			startSearch(SearchKind::Hint);
 	}
@@ -125,6 +145,7 @@ void ReversiGui::onSearchProgress(const engine::Result& r, int forPosition, Sear
 {
 	if (forPosition != positionId || r.move < 0)
 		return;
+	onEvaluation(r, forPosition, game.toMove()); // beide Suchen rechnen fuer die aktuelle Stellung
 	if (kind == SearchKind::Hint)
 		offerHint(r);
 	else if (computerThinking)
@@ -140,7 +161,10 @@ void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, Search
 	{
 		hintRunning = false;
 		if (!r.stopped)
+		{
+			onEvaluation(r, forPosition, game.toMove());
 			offerHint(r);
+		}
 		return;
 	}
 
@@ -158,7 +182,6 @@ void ReversiGui::applyComputerMove(const engine::Result& r)
 	computerThinking = false;
 	qDebug() << "PC-Zug" << r.move / 8 << r.move % 8 << "Tiefe" << r.depth << "Wert" << r.score
 	         << (r.exact ? "exakt" : r.wld ? "WLD" : "") << "Knoten" << r.nodes << "Zeit" << r.seconds;
-	lastResultInfo = provenResultText(r);
 	handleTurn(playAndRemember(r.move, true));
 }
 
@@ -201,6 +224,70 @@ void ReversiGui::stopSearch()
 	hintPending = false;
 }
 
+// ======================= Bewertungsanzeige =======================
+
+void ReversiGui::startAnalysis()
+{
+	stopAnalysis();
+	shownEvalDepth = -1;
+	engine::Settings s;
+	s.maxDepth = 10;
+	s.endgameEmpties = 16;
+	s.threads = 1;
+	s.timeMs = 500;
+	const bb::u64 P = game.own(), O = game.opponentDiscs();
+	const int forPosition = positionId;
+	const Color side = game.toMove();
+	analyzer.resetStop();
+	analysisThread = std::thread([this, P, O, s, forPosition, side]() {
+		const engine::Result r = analyzer.search(P, O, s);
+		QMetaObject::invokeMethod(this, [this, r, forPosition, side]() { onEvaluation(r, forPosition, side); },
+		                          Qt::QueuedConnection);
+	});
+}
+
+void ReversiGui::stopAnalysis()
+{
+	analyzer.stop();
+	if (analysisThread.joinable())
+		analysisThread.join();
+}
+
+// Nimmt eine Bewertung der aktuellen Stellung entgegen; tiefere (oder bewiesene) ersetzen flachere.
+void ReversiGui::onEvaluation(const engine::Result& r, int forPosition, Color sideToMove)
+{
+	if (forPosition != positionId || r.move < 0 || r.depth <= 0)
+		return;
+	const bool proven = r.exact || r.wld;
+	const int depth = proven ? 1000 : r.depth;
+	if (depth <= shownEvalDepth)
+		return;
+	shownEvalDepth = depth;
+	showEvaluation(sideToMove == Color::Black ? r.score : -r.score, proven);
+}
+
+void ReversiGui::showEvaluation(int blackScore, bool proven)
+{
+	const QString white = QStringLiteral("Wei\u00DF");
+	QString result;
+	if (proven)
+		result = QStringLiteral("<b>") + (blackScore > 0 ? QStringLiteral("Schwarz") : blackScore < 0 ? white : QStringLiteral("Remis")) + "</b>";
+	else
+	{
+		const int advantage = std::abs(blackScore);
+		const QString sign = advantage < EVAL_EQUAL_BAND ? QStringLiteral("=") : blackScore > 0 ? QStringLiteral("&gt;") : QStringLiteral("&lt;");
+		const double scale = 1.0 + 2.0 * std::min(advantage, EVAL_FULL_SCALE) / EVAL_FULL_SCALE; // 1x .. 3x
+		const int px = (int)(ui->evalLabel->fontInfo().pixelSize() * scale);
+		result = QStringLiteral("Schwarz <span style=\"font-size:%1px; font-weight:bold;\">%2</span> ").arg(px).arg(sign) + white;
+	}
+	ui->evalLabel->setText(QStringLiteral("Gewinnchance: ") + result);
+}
+
+void ReversiGui::showFinalEvaluation()
+{
+	showEvaluation(game.count(Color::Black) - game.count(Color::White), true);
+}
+
 // ======================= Einstellungen =======================
 
 void ReversiGui::setupModeBox()
@@ -217,7 +304,7 @@ void ReversiGui::setupLevelBox()
 {
 	static const char16_t* const names[engine::LEVELS] = {
 		u"Anf\u00E4nger", u"Leicht", u"Leicht+", u"Mittel", u"Mittel+", u"Fortgeschritten",
-		u"Stark", u"Sehr stark", u"Experte", u"Meister", u"Gro\u00DFmeister", u"Weltklasse" };
+		u"Stark", u"Meister", u"Gro\u00DFmeister", u"Weltklasse" };
 	for (int l = 1; l <= engine::LEVELS; l++)
 	{
 		const QString text = QString::number(l) + QStringLiteral(" \u2013 ") + QString::fromUtf16(names[l - 1])
@@ -237,7 +324,6 @@ void ReversiGui::onModeChanged()
 	QSettings().setValue("mode", (int)mode);
 	ui->levelBox->setEnabled(mode == Mode::VsComputer);
 	stopSearch();
-	lastResultInfo.clear();
 	framedMove = -1;
 	framedFlips = 0;
 	handleTurn(Game::Turn::Next);
@@ -277,12 +363,20 @@ void ReversiGui::updateView()
 	ui->board->setState(s, animateNextUpdate && ui->animateBox->isChecked());
 	animateNextUpdate = false;
 
-	ui->BlackChipsLabel->setText(QStringLiteral("\u25CF Schwarz  ") + QString::number(game.count(Color::Black)));
-	ui->WhiteChipsLabel->setText(QStringLiteral("\u25CB Wei\u00DF  ") + QString::number(game.count(Color::White)));
-	const QString active = QStringLiteral("background: #c8e6c9;"), inactive = QStringLiteral("background: transparent;");
+	// Feste Farben (unabhaengig von hellem/dunklem Design): Schwarz dunkel, Weiss hell;
+	// wer am Zug ist, bekommt einen gruenen Rand, sonst eine graue Kontur (sichtbar in beiden Designs).
 	const bool running = !game.isOver();
-	ui->BlackChipsLabel->setStyleSheet(running && game.toMove() == Color::Black ? active : inactive);
-	ui->WhiteChipsLabel->setStyleSheet(running && game.toMove() == Color::White ? active : inactive);
+	auto scoreStyle = [running, this](Color c) {
+		const QString colors = c == Color::Black ? QStringLiteral("background: #202020; color: #ffffff;")
+		                                         : QStringLiteral("background: #f2f2f2; color: #202020;");
+		const QString border = running && game.toMove() == c ? QStringLiteral("#43a047") : QStringLiteral("#8a8a8a"); // gruen = am Zug, grau = Kontur
+		return colors + QStringLiteral(" border: 3px solid ") + border + ";";
+	};
+	ui->BlackChipsLabel->setText(QStringLiteral("Schwarz  ") + QString::number(game.count(Color::Black)));
+	ui->WhiteChipsLabel->setText(QStringLiteral("Wei\u00DF  ") + QString::number(game.count(Color::White)));
+	ui->BlackChipsLabel->setStyleSheet(scoreStyle(Color::Black));
+	ui->WhiteChipsLabel->setStyleSheet(scoreStyle(Color::White));
+	ui->undoButton->setEnabled(game.canUndo());
 }
 
 // Beschriftung des Tipp-Schalters: zeigt, wie tief der Vorschlag schon gerechnet ist.
@@ -321,16 +415,6 @@ QString ReversiGui::gameOverText() const
 	if (b == w)
 		return QStringLiteral("Unentschieden ") + score;
 	return colorName(b > w ? Color::Black : Color::White) + QStringLiteral(" gewinnt ") + score;
-}
-
-// Nur bewiesene Ergebnisse (Partie bis zum Ende durchgerechnet) werden angezeigt.
-QString ReversiGui::provenResultText(const engine::Result& r)
-{
-	if (!r.exact && !r.wld)
-		return QString();
-	if (r.score > 0) return QStringLiteral("\nDer PC gewinnt bei bestem Spiel.");
-	if (r.score < 0) return QStringLiteral("\nDu kannst noch gewinnen!");
-	return QStringLiteral("\nRemis bei bestem Spiel.");
 }
 
 // ======================= Beenden =======================

@@ -52,6 +52,16 @@ namespace
 			p.drawEllipse(cellCenter(r, cell, bb::lsb(markers)), 0.11 * cell, 0.11 * cell);
 	}
 
+	// Duenner Ring direkt um einen Stein (letzter Zug, umgedrehte Steine).
+	void drawStoneRing(QPainter& p, const QRectF& r, double cell, int square, const QColor& color)
+	{
+		QPen pen(color);
+		pen.setWidthF(std::max(1.5, 0.035 * cell));
+		p.setPen(pen);
+		p.setBrush(Qt::NoBrush);
+		p.drawEllipse(cellCenter(r, cell, square), 0.45 * cell, 0.45 * cell);
+	}
+
 	void drawSquareFrame(QPainter& p, const QRectF& r, double cell, int square, const QColor& color)
 	{
 		const double inset = 0.06 * cell;
@@ -135,9 +145,9 @@ void BoardWidget::paintEvent(QPaintEvent*)
 	}
 	drawMarkers(p, r, cell, m_state.markers);
 	for (bb::u64 f = m_state.lastFlipped; f; f &= f - 1)
-		drawSquareFrame(p, r, cell, bb::lsb(f), FLIPPED_ORANGE);
+		drawStoneRing(p, r, cell, bb::lsb(f), FLIPPED_ORANGE);
 	if (m_state.lastMove >= 0)
-		drawSquareFrame(p, r, cell, m_state.lastMove, LAST_MOVE_RED);
+		drawStoneRing(p, r, cell, m_state.lastMove, LAST_MOVE_RED);
 	if (m_state.hint >= 0)
 		drawSquareFrame(p, r, cell, m_state.hint, HINT_YELLOW);
 

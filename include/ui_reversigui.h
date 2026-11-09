@@ -21,6 +21,7 @@ public:
 	QLabel* titleLabel;
 	QLabel* BlackChipsLabel;
 	QLabel* WhiteChipsLabel;
+	QLabel* evalLabel;
 	QLabel* modeLabel;
 	QComboBox* modeBox;
 	QLabel* levelLabel;
@@ -29,12 +30,13 @@ public:
 	QCheckBox* animateBox;
 	QLabel* MessageLabel;
 	QPushButton* newGameButton;
+	QPushButton* undoButton;
 	QPushButton* exitGameButton;
 
 	void setupUi(QWidget* w)
 	{
 		w->setObjectName(QStringLiteral("ReversiGui"));
-		const QString title = QStringLiteral("Reversi v" APP_VERSION " beta \u00A9 Silas Maile"); // APP_VERSION kommt aus CMake
+		const QString title = QStringLiteral("Reversi v" APP_VERSION " \u00A9 Silas Maile"); // APP_VERSION kommt aus CMake
 		w->setWindowTitle(title);
 
 		// Grundschrift etwas groesser als Standard, daraus alle Hoehen ableiten
@@ -48,6 +50,10 @@ public:
 			"QPushButton { background: #2e7d32; color: white; border: none; border-radius: 10px;"
 			"  padding: 6px 14px; font-weight: bold; }"
 			"QPushButton:pressed { background: #1b5e20; }"
+			"QPushButton:disabled { background: #9e9e9e; color: #e0e0e0; }"
+			"QPushButton#undoButton { background: #1565c0; }"
+			"QPushButton#undoButton:pressed { background: #0d47a1; }"
+			"QPushButton#undoButton:disabled { background: #9e9e9e; }"
 			"QPushButton#exitGameButton { background: #757575; }"
 			"QPushButton#exitGameButton:pressed { background: #505050; }"
 			"QLabel#BlackChipsLabel, QLabel#WhiteChipsLabel { border-radius: 8px; padding: 4px 10px; }"));
@@ -87,6 +93,13 @@ public:
 		scoreRow->addWidget(BlackChipsLabel);
 		scoreRow->addWidget(WhiteChipsLabel);
 		mainLayout->addLayout(scoreRow);
+
+		// Bewertung der Stellung ("Gewinnchance: Schwarz > Weiss"), Zeichen waechst mit dem Vorteil
+		evalLabel = new QLabel(w);
+		evalLabel->setAlignment(Qt::AlignCenter);
+		evalLabel->setTextFormat(Qt::RichText);
+		evalLabel->setMinimumHeight((int)(lh * 2.6)); // Platz fuer das grosse Zeichen, Layout springt nicht
+		mainLayout->addWidget(evalLabel);
 
 		// Gegner (Computer oder zweiter Mensch) und Spielstaerke; Beschriftungen gleich breit
 		QHBoxLayout* modeRow = new QHBoxLayout();
@@ -128,15 +141,18 @@ public:
 		QHBoxLayout* buttonRow = new QHBoxLayout();
 		buttonRow->setSpacing(12);
 		newGameButton = new QPushButton(QStringLiteral("Neues Spiel"), w);
+		undoButton = new QPushButton(QStringLiteral("Zug zur\u00FCck"), w);
+		undoButton->setObjectName(QStringLiteral("undoButton"));
 		exitGameButton = new QPushButton(QStringLiteral("Beenden"), w);
 		exitGameButton->setObjectName(QStringLiteral("exitGameButton"));
-		for (QPushButton* b : { newGameButton, exitGameButton })
+		for (QPushButton* b : { newGameButton, undoButton, exitGameButton })
 		{
 			b->setMinimumHeight(touch);
 			b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 		}
-		buttonRow->addWidget(newGameButton, 2);
-		buttonRow->addWidget(exitGameButton, 1);
+		buttonRow->addWidget(newGameButton, 3);
+		buttonRow->addWidget(undoButton, 3);
+		buttonRow->addWidget(exitGameButton, 2);
 		mainLayout->addLayout(buttonRow);
 	}
 };

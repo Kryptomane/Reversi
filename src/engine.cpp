@@ -465,22 +465,20 @@ namespace engine
 	{
 		struct Level { int depth; int noise; int endgame; int maxSeconds; }; // Namen stehen in der GUI
 
-		// Rauschen (nur Stufen 1-4) in Bewertungseinheiten: Ecke = 400, ein Zug Mobilitaet = 30.
-		// Stufen 10-12 entsprechen der frueheren Zeitsteuerung mit ca. 3 s / 5 s / 10 s Bedenkzeit.
+		// Rauschen (Stufen 1-5) in Bewertungseinheiten: Ecke = 400, ein Zug Mobilitaet = 30.
+		// Stufen 8-10 entsprechen der frueheren Zeitsteuerung mit ca. 3 s / 5 s / 10 s Bedenkzeit.
 		constexpr Level LEVEL_TABLE[LEVELS] = {
 			//  Tiefe Rauschen Endspiel Notbremse(s)
-			{  1, 400,  0, 10 },  //  1 Anfaenger
-			{  2, 250,  0, 10 },  //  2 Leicht
-			{  3, 150,  4, 10 },  //  3 Leicht+
-			{  4,  80,  6, 10 },  //  4 Mittel
-			{  5,   0,  8, 10 },  //  5 Mittel+
-			{  6,   0, 10, 10 },  //  6 Fortgeschritten
-			{  8,   0, 12, 10 },  //  7 Stark
-			{ 10,   0, 14, 10 },  //  8 Sehr stark
-			{ 12,   0, 16, 15 },  //  9 Experte
-			{ 15,   0, 20, 20 },  // 10 Meister      (~3 s alt)
-			{ 16,   0, 21, 25 },  // 11 Grossmeister (~5 s alt)
-			{ 17,   0, 22, 40 },  // 12 Weltklasse   (~10 s alt)
+			{  1, 600,  0, 10 },  //  1 Anfaenger
+			{  1, 300,  0, 10 },  //  2 Leicht
+			{  2, 200,  0, 10 },  //  3 Leicht+
+			{  3, 120,  4, 10 },  //  4 Mittel
+			{  4,  50,  6, 10 },  //  5 Mittel+
+			{  5,   0,  8, 10 },  //  6 Fortgeschritten
+			{  7,   0, 10, 10 },  //  7 Stark
+			{ 15,   0, 20, 20 },  //  8 Meister      (~3 s alt)
+			{ 16,   0, 21, 25 },  //  9 Grossmeister (~5 s alt)
+			{ 17,   0, 22, 40 },  // 10 Weltklasse   (~10 s alt)
 		};
 
 		const Level& levelData(int level) { return LEVEL_TABLE[std::clamp(level, 1, LEVELS) - 1]; }

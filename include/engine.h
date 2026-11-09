@@ -31,7 +31,7 @@ namespace engine
 
 	// Spielstaerke-Stufen 1 (Anfaenger) .. LEVELS. Die Staerke haengt an der Suchtiefe, nicht an der
 	// Zeit -> auf jedem Geraet gleich stark. Die Zeitgrenze ist nur eine Notbremse.
-	constexpr int LEVELS = 12;
+	constexpr int LEVELS = 10;
 	Settings levelSettings(int level);
 
 	// Zugvorschlag: rechnet ohne feste Tiefe immer tiefer (bis zur Zeitgrenze) und meldet jede

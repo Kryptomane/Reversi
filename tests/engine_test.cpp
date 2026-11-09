@@ -82,6 +82,32 @@ static void testGameFlow()
 	check(ok, "Spielablauf: Zugwechsel, Passen, Spielende (2000 Partien)");
 }
 
+// Zuruecknehmen stellt jede fruehere Stellung exakt wieder her, bis zum Spielanfang.
+static void testUndo()
+{
+	struct Snapshot { u64 black, white; Color toMove; bool over; };
+	bool ok = true;
+	for (int g = 0; g < 2000 && ok; g++)
+	{
+		Game game;
+		std::vector<Snapshot> seen;
+		while (!game.isOver())
+		{
+			seen.push_back({ game.discs(Color::Black), game.discs(Color::White), game.toMove(), game.isOver() });
+			game.play(randomMove(game.own(), game.opponentDiscs()));
+		}
+		for (int i = (int)seen.size() - 1; i >= 0 && ok; i--)
+		{
+			game.undo();
+			const Snapshot& s = seen[i];
+			ok &= game.discs(Color::Black) == s.black && game.discs(Color::White) == s.white
+			   && game.toMove() == s.toMove && game.isOver() == s.over;
+		}
+		ok &= !game.canUndo();
+	}
+	check(ok, "Zuruecknehmen: jede Stellung bis zum Anfang exakt (2000 Partien)");
+}
+
 static void testEvaluationSymmetry()
 {
 	bool ok = true;
@@ -113,7 +139,7 @@ static void testLevelsAreOrdered()
 {
 	engine::Engine a(18), b(18);
 	bool ok = true;
-	for (int level = 1; level < 8; level++)
+	for (int level = 1; level < 7; level++)
 	{
 		engine::Settings stronger = engine::levelSettings(level + 1), weaker = engine::levelSettings(level);
 		stronger.threads = weaker.threads = 1;
@@ -121,7 +147,7 @@ static void testLevelsAreOrdered()
 		printf("    Stufe %d gegen Stufe %d: %.1f/20\n", level + 1, level, pts);
 		ok &= pts > 10;
 	}
-	check(ok, "Stufen: jede hoehere schlaegt die niedrigere (1..8)");
+	check(ok, "Stufen: jede hoehere schlaegt die niedrigere (1..7)");
 }
 
 // Der Tipp meldet Zwischenstaende mit wachsender Tiefe und laesst sich jederzeit stoppen.
@@ -154,6 +180,7 @@ int main()
 {
 	testPerft();
 	testGameFlow();
+	testUndo();
 	testEvaluationSymmetry();
 	testEndgameExact(1);
 	testEndgameExact(4);
