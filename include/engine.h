@@ -24,8 +24,11 @@ namespace engine
 		int timeMs = 2000;       // Obergrenze fuer die Bedenkzeit
 		int maxDepth = 60;       // Suchtiefe in Halbzuegen
 		int endgameEmpties = 20; // ab so wenigen freien Feldern bis zum Spielende rechnen
+		bool maximizeMargin = true; // nach bewiesenem Sieg auch die hoechste Steindifferenz suchen (langsam)
 		int threads = 0;         // 0 = alle Kerne
 		int noise = 0;           // >0: Zufallsrauschen +-noise auf die Zugbewertung (schwache Stufen)
+		bool probCut = false;    // selektive Suche: unwahrscheinliche Zweige per flacher Vorhersage abschneiden
+		double probCutConfidence = 1.5; // Sicherheitsabstand in Standardabweichungen (groesser = vorsichtiger)
 		std::function<void(const Result&)> onProgress; // optional: nach jeder fertigen Iteration (Such-Thread!)
 	};
 
@@ -73,7 +76,7 @@ namespace engine
 
 		static RootMoves rootMoves(u64 P, u64 O);
 		void iterativeDeepening(u64 P, u64 O, RootMoves& rm, int maxDepth, int empties, Result& res);
-		void solveEndgame(u64 P, u64 O, RootMoves& rm, int empties, Result& res);
+		void solveEndgame(u64 P, u64 O, RootMoves& rm, int empties, bool maximizeMargin, Result& res);
 		void reportProgress(const Result& res) const { if (progress && *progress) (*progress)(res); }
 		int pickWithNoise(u64 P, u64 O, const RootMoves& rm, int depth, int noise);
 
@@ -87,6 +90,8 @@ namespace engine
 		std::atomic<bool> abort{ false };
 		std::atomic<bool> stopRequested{ false };
 		std::atomic<long long> nodes{ 0 };
+		bool probCut = false;
+		double probCutConfidence = 1.5;
 		Clock::time_point deadline;
 		const std::function<void(const Result&)>* progress = nullptr;
 	};

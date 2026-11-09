@@ -165,6 +165,26 @@ static void testProgressAndStop()
 	check(increasing && r.stopped && r.move >= 0 && r.seconds < 5, "Tipp: Zwischenstaende Tiefe 1,2,3,... und Abbruch per stop()");
 }
 
+// ProbCut: bei gleicher Tiefe deutlich schneller und meist derselbe Zug.
+static void testProbCut()
+{
+	double plain = 0, selective = 0;
+	int same = 0, n = 0;
+	for (const bb::Position& p : samplePositions(26, 8, 31))
+	{
+		engine::Engine a(20), b(20);
+		engine::Settings s;
+		s.threads = 1; s.maxDepth = 10; s.endgameEmpties = 0; s.timeMs = 1000000;
+		const engine::Result r1 = a.search(p.P, p.O, s);
+		s.probCut = true;
+		const engine::Result r2 = b.search(p.P, p.O, s);
+		plain += r1.seconds; selective += r2.seconds;
+		same += r1.move == r2.move; n++;
+	}
+	printf("    Tiefe 10: ohne %.2f s, mit ProbCut %.2f s, gleicher Zug %d/%d\n", plain, selective, same, n);
+	check(selective * 2 < plain && same * 4 >= n * 3, "ProbCut: mind. 2x schneller, mind. 75 % gleiche Zuege");
+}
+
 static void testStrength()
 {
 	engine::Engine e(20);
@@ -186,6 +206,7 @@ int main()
 	testEndgameExact(4);
 	testLevelsAreOrdered();
 	testProgressAndStop();
+	testProbCut();
 	testStrength();
 	printf(failures ? "\n%d Test(s) fehlgeschlagen\n" : "\nAlle Tests gruen\n", failures);
 	return failures ? 1 : 0;
