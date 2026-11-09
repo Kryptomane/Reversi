@@ -12,8 +12,8 @@ struct BoardState
 	bb::u64 black = 0, white = 0;
 	bb::u64 markers = 0;              // Felder mit Zugpunkt
 	int hint = -1;                    // Zugvorschlag (gelber Rahmen), -1 = keiner
-	int humanMove = -1;               // letzter Zug eines Menschen (blauer Rahmen), -1 = keiner
-	int computerMove = -1;            // letzter Zug des PCs (roter Rahmen), -1 = keiner
+	int lastMove = -1;                // Zug des Gegners (roter Rahmen), -1 = keiner
+	bb::u64 lastFlipped = 0;          // dabei umgedrehte Steine (oranger Rahmen)
 };
 
 class BoardWidget : public QWidget

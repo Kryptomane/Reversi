@@ -41,6 +41,7 @@ private:
 	void onSearchProgress(const engine::Result& r, int forPosition, SearchKind kind);
 	void onSearchResult(const engine::Result& r, int forPosition, SearchKind kind);
 	void applyComputerMove(const engine::Result& r);
+	Game::Turn playAndRemember(int square, bool showFrames); // setzt; merkt Zug + umgedrehte Steine fuer die Rahmen
 	void offerHint(const engine::Result& r);   // erst nach HINT_DELAY_MS anzeigen (springt sonst stark)
 	void showHint(const engine::Result& r);
 	void stopSearch();
@@ -81,8 +82,8 @@ private:
 	QElapsedTimer hintClock;       // seit wann der Tipp rechnet
 	engine::Result pendingHint;    // bester Vorschlag aus der ersten Sekunde
 	bool hintPending = false;
-	int lastHumanMove = -1;        // blauer Rahmen
-	int lastComputerMove = -1;     // roter Rahmen
+	int framedMove = -1;           // roter Rahmen: Zug des PCs (bzw. im 2-Spieler-Modus der letzte Zug)
+	bb::u64 framedFlips = 0;       // oranger Rahmen: dabei umgedrehte Steine
 	bool animateNextUpdate = false;
 	QString passInfo;              // z. B. "Weiss muss passen. "
 	QString lastResultInfo;        // z. B. "Der PC gewinnt bei bestem Spiel."

@@ -44,7 +44,8 @@ void ReversiGui::startNewGame()
 	game.reset();
 	ai.clear();
 	lastResultInfo.clear();
-	lastHumanMove = lastComputerMove = -1;
+	framedMove = -1;
+	framedFlips = 0;
 	handleTurn(Game::Turn::Next);
 }
 
@@ -55,11 +56,8 @@ void ReversiGui::onFieldClicked(int x, int y)
 		return;
 	if (hintRunning)
 		stopSearch(); // Tipp wird nicht mehr gebraucht
-	lastHumanMove = square;
-	if (mode == Mode::TwoPlayers)
-		lastComputerMove = -1;
-	animateNextUpdate = true;
-	handleTurn(game.play(square));
+	// gegen den PC verschwinden die Rahmen, sobald der Mensch zieht; zu zweit zeigen sie den letzten Zug
+	handleTurn(playAndRemember(square, mode == Mode::TwoPlayers));
 }
 
 void ReversiGui::handleTurn(Game::Turn turn)
@@ -161,9 +159,15 @@ void ReversiGui::applyComputerMove(const engine::Result& r)
 	qDebug() << "PC-Zug" << r.move / 8 << r.move % 8 << "Tiefe" << r.depth << "Wert" << r.score
 	         << (r.exact ? "exakt" : r.wld ? "WLD" : "") << "Knoten" << r.nodes << "Zeit" << r.seconds;
 	lastResultInfo = provenResultText(r);
-	lastComputerMove = r.move;
+	handleTurn(playAndRemember(r.move, true));
+}
+
+Game::Turn ReversiGui::playAndRemember(int square, bool showFrames)
+{
+	framedMove = showFrames ? square : -1;
+	framedFlips = showFrames ? bb::flips(game.own(), game.opponentDiscs(), 1ULL << square) : 0;
 	animateNextUpdate = true;
-	handleTurn(game.play(r.move));
+	return game.play(square);
 }
 
 void ReversiGui::offerHint(const engine::Result& r)
@@ -234,7 +238,8 @@ void ReversiGui::onModeChanged()
 	ui->levelBox->setEnabled(mode == Mode::VsComputer);
 	stopSearch();
 	lastResultInfo.clear();
-	lastComputerMove = -1;
+	framedMove = -1;
+	framedFlips = 0;
 	handleTurn(Game::Turn::Next);
 }
 
@@ -267,8 +272,8 @@ void ReversiGui::updateView()
 	s.white = game.discs(Color::White);
 	s.markers = humanToMove() ? game.legalMoves() : 0;
 	s.hint = hintSquare;
-	s.humanMove = lastHumanMove;
-	s.computerMove = lastComputerMove;
+	s.lastMove = framedMove;
+	s.lastFlipped = framedFlips;
 	ui->board->setState(s, animateNextUpdate && ui->animateBox->isChecked());
 	animateNextUpdate = false;
 

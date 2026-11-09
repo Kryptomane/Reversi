@@ -13,8 +13,8 @@ namespace
 	const QColor BLACK_STONE(20, 20, 20);
 	const QColor WHITE_STONE(245, 245, 245);
 	const QColor HINT_YELLOW(255, 215, 0);
-	const QColor HUMAN_BLUE(30, 110, 255);
-	const QColor COMPUTER_RED(230, 30, 30);
+	const QColor LAST_MOVE_RED(230, 30, 30);
+	const QColor FLIPPED_ORANGE(255, 140, 0);
 
 	QPointF cellCenter(const QRectF& r, double cell, int square)
 	{
@@ -134,10 +134,10 @@ void BoardWidget::paintEvent(QPaintEvent*)
 		drawStones(p, r, cell, m_state.white & m_flipping, showNewColor ? WHITE_STONE : BLACK_STONE, scale);
 	}
 	drawMarkers(p, r, cell, m_state.markers);
-	if (m_state.humanMove >= 0)
-		drawSquareFrame(p, r, cell, m_state.humanMove, HUMAN_BLUE);
-	if (m_state.computerMove >= 0)
-		drawSquareFrame(p, r, cell, m_state.computerMove, COMPUTER_RED);
+	for (bb::u64 f = m_state.lastFlipped; f; f &= f - 1)
+		drawSquareFrame(p, r, cell, bb::lsb(f), FLIPPED_ORANGE);
+	if (m_state.lastMove >= 0)
+		drawSquareFrame(p, r, cell, m_state.lastMove, LAST_MOVE_RED);
 	if (m_state.hint >= 0)
 		drawSquareFrame(p, r, cell, m_state.hint, HINT_YELLOW);
 
