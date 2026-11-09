@@ -1,8 +1,9 @@
 #ifndef UI_REVERSIGUI_H
 #define UI_REVERSIGUI_H
 #pragma once
-// Oberflaeche mit Layouts (passt sich an Fenster- bzw. Handy-Bildschirm an):
-// oben das Brett, darunter Steinzahl, Einstellungen, Status und Knoepfe.
+// Oberflaeche fuer Handy (Hochformat) und Desktop: oben das Brett, darunter Titel, Steinstand,
+// Spielstaerke, Tipp-Schalter, Status und grosse Knoepfe. Alle Groessen haengen an der
+// Schriftgroesse -> passen sich der Display-Dichte an (Qt rechnet in geraeteunabhaengigen Pixeln).
 
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QLabel>
@@ -16,10 +17,11 @@ class Ui_ReversiGui
 {
 public:
 	BoardWidget* board;
+	QLabel* titleLabel;
 	QLabel* BlackChipsLabel;
 	QLabel* WhiteChipsLabel;
-	QLabel* timeLabel;
-	QComboBox* timeBox;
+	QLabel* levelLabel;
+	QComboBox* levelBox;
 	QCheckBox* hintBox;
 	QLabel* MessageLabel;
 	QPushButton* newGameButton;
@@ -28,49 +30,92 @@ public:
 	void setupUi(QWidget* w)
 	{
 		w->setObjectName(QStringLiteral("ReversiGui"));
-		w->setWindowTitle(QStringLiteral("Reversi"));
+		const QString title = QStringLiteral("Reversi v" APP_VERSION " alpha \u00A9 Silas Maile"); // APP_VERSION kommt aus CMake
+		w->setWindowTitle(title);
+
+		// Grundschrift etwas groesser als Standard, daraus alle Hoehen ableiten
+		QFont base = w->font();
+		base.setPointSizeF(base.pointSizeF() * 1.15);
+		w->setFont(base);
+		const int lh = QFontMetrics(base).height();   // eine Textzeile in logischen Pixeln
+		const int touch = (int)(lh * 2.6);            // Mindesthoehe fuer Fingerbedienung (~48 dp)
+
+		w->setStyleSheet(QStringLiteral(
+			"QPushButton { background: #2e7d32; color: white; border: none; border-radius: 10px;"
+			"  padding: 6px 14px; font-weight: bold; }"
+			"QPushButton:pressed { background: #1b5e20; }"
+			"QPushButton#exitGameButton { background: #757575; }"
+			"QPushButton#exitGameButton:pressed { background: #505050; }"
+			"QLabel#BlackChipsLabel, QLabel#WhiteChipsLabel { border-radius: 8px; padding: 4px 10px; }"));
 
 		QVBoxLayout* mainLayout = new QVBoxLayout(w);
-		mainLayout->setContentsMargins(8, 8, 8, 8);
-		mainLayout->setSpacing(6);
+		mainLayout->setContentsMargins(12, 12, 12, 12);
+		mainLayout->setSpacing(10);
 
 		board = new BoardWidget(w);
 		mainLayout->addWidget(board, 1);
 
+		titleLabel = new QLabel(title, w);
+		titleLabel->setAlignment(Qt::AlignHCenter);
+		QFont tf = base;
+		tf.setPointSizeF(base.pointSizeF() * 0.8);
+		tf.setItalic(true);
+		titleLabel->setFont(tf);
+		titleLabel->setStyleSheet(QStringLiteral("color: gray;"));
+		mainLayout->addWidget(titleLabel);
+
+		// Steinstand; wer am Zug ist, wird in updateBoard() hervorgehoben
 		QHBoxLayout* scoreRow = new QHBoxLayout();
 		BlackChipsLabel = new QLabel(w);
 		WhiteChipsLabel = new QLabel(w);
-		QFont f = BlackChipsLabel->font();
-		f.setBold(true);
-		BlackChipsLabel->setFont(f);
-		WhiteChipsLabel->setFont(f);
+		BlackChipsLabel->setObjectName(QStringLiteral("BlackChipsLabel"));
+		WhiteChipsLabel->setObjectName(QStringLiteral("WhiteChipsLabel"));
+		QFont sf = base;
+		sf.setBold(true);
+		sf.setPointSizeF(base.pointSizeF() * 1.15);
+		for (QLabel* l : { BlackChipsLabel, WhiteChipsLabel })
+		{
+			l->setFont(sf);
+			l->setMinimumHeight((int)(lh * 1.8));
+			l->setAlignment(Qt::AlignCenter);
+			l->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+		}
 		scoreRow->addWidget(BlackChipsLabel);
-		scoreRow->addStretch(1);
 		scoreRow->addWidget(WhiteChipsLabel);
 		mainLayout->addLayout(scoreRow);
 
-		QHBoxLayout* timeRow = new QHBoxLayout();
-		timeLabel = new QLabel(QStringLiteral("Bedenkzeit PC:"), w);
-		timeBox = new QComboBox(w);
-		timeRow->addWidget(timeLabel);
-		timeRow->addWidget(timeBox);
-		timeRow->addStretch(1);
-		mainLayout->addLayout(timeRow);
+		// Spielstaerke
+		QHBoxLayout* levelRow = new QHBoxLayout();
+		levelLabel = new QLabel(QStringLiteral("Spielst\u00E4rke:"), w);
+		levelBox = new QComboBox(w);
+		levelBox->setMinimumHeight((int)(lh * 2.2));
+		levelBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+		levelRow->addWidget(levelLabel);
+		levelRow->addWidget(levelBox, 1);
+		mainLayout->addLayout(levelRow);
 
 		hintBox = new QCheckBox(QStringLiteral("Besten Zug zeigen"), w);
+		hintBox->setMinimumHeight((int)(lh * 2.0));
 		mainLayout->addWidget(hintBox);
 
 		MessageLabel = new QLabel(w);
 		MessageLabel->setWordWrap(true);
-		MessageLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-		MessageLabel->setMinimumHeight(MessageLabel->fontMetrics().lineSpacing() * 4); // Layout springt nicht
+		MessageLabel->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+		MessageLabel->setMinimumHeight(lh * 3); // Layout springt nicht, wenn der Text wechselt
 		mainLayout->addWidget(MessageLabel);
 
 		QHBoxLayout* buttonRow = new QHBoxLayout();
+		buttonRow->setSpacing(12);
 		newGameButton = new QPushButton(QStringLiteral("Neues Spiel"), w);
 		exitGameButton = new QPushButton(QStringLiteral("Beenden"), w);
-		buttonRow->addWidget(newGameButton);
-		buttonRow->addWidget(exitGameButton);
+		exitGameButton->setObjectName(QStringLiteral("exitGameButton"));
+		for (QPushButton* b : { newGameButton, exitGameButton })
+		{
+			b->setMinimumHeight(touch);
+			b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+		}
+		buttonRow->addWidget(newGameButton, 2);
+		buttonRow->addWidget(exitGameButton, 1);
 		mainLayout->addLayout(buttonRow);
 	}
 };

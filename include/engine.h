@@ -1,79 +1,84 @@
 #pragma once
 // Suchmaschine: iterative Vertiefung, Negamax mit Alpha-Beta (PVS), Transpositionstabelle,
-// Zugsortierung und exakte Endspielrechnung. Parallel: an der Wurzel wird der erste Zug allein
-// gerechnet (setzt alpha), die restlichen Zuege verteilen sich auf einen Thread-Pool mit
-// gemeinsamem alpha und gemeinsamer (lock-freier) Transpositionstabelle.
-// Arbeitet nur auf Bitboards (reversi_core.h), keine Abhaengigkeit von Qt/OpenCV.
+// Zugsortierung und exakte Endspielrechnung; parallel auf allen Kernen. Keine Abhaengigkeit von Qt.
 
-#include "reversi_core.h"
-#include <vector>
-#include <chrono>
+#include "bitboard.h"
+#include "transpositiontable.h"
 #include <atomic>
-#include <memory>
+#include <chrono>
 
 namespace engine
 {
 	using bb::u64;
 
-	constexpr int WIN = 1000000; // Terminalwert: WIN + Steindifferenz
+	constexpr int WIN = 1000000;      // Terminalwert: +-(WIN + Steindifferenz)
+	constexpr int INF = WIN + 64;     // groesser als jeder moegliche Wert
+
+	inline bool isProvenResult(int score) { return score >= WIN - 64 || score <= -WIN + 64; }
 
 	struct Settings
 	{
-		int timeMs = 2000;       // Bedenkzeit pro Zug
-		int maxDepth = 60;       // Obergrenze Suchtiefe (Halbzuege)
+		int timeMs = 2000;       // Obergrenze fuer die Bedenkzeit
+		int maxDepth = 60;       // Suchtiefe in Halbzuegen
 		int endgameEmpties = 20; // ab so wenigen freien Feldern bis zum Spielende rechnen
 		int threads = 0;         // 0 = alle Kerne
+		int noise = 0;           // >0: Zufallsrauschen +-noise auf die Zugbewertung (schwache Stufen)
 	};
+
+	// Spielstaerke-Stufen 1 (Anfaenger) .. LEVELS (Meister). Die Staerke haengt an der Suchtiefe,
+	// nicht an der Zeit -> auf jedem Geraet gleich stark.
+	constexpr int LEVELS = 10;
+	Settings levelSettings(int level);
+	Settings hintSettings(int level);   // Zugvorschlag: deutlich staerker als der PC auf dieser Stufe
 
 	struct Result
 	{
 		int move = -1;        // Feldindex x*8+y, -1 = kein Zug (passen)
 		int score = 0;        // aus Sicht des Spielers am Zug
 		int depth = 0;        // letzte vollstaendig gerechnete Tiefe
-		bool exact = false;   // Partie bis zum Ende durchgerechnet (score = WIN + Differenz bzw. 0)
-		bool wld = false;     // nur Sieg/Remis/Niederlage bewiesen, Differenz nicht maximiert
+		bool exact = false;   // bis zum Spielende gerechnet (score = +-(WIN + Differenz) bzw. 0)
+		bool wld = false;     // nur Sieg/Remis/Niederlage bewiesen
 		bool stopped = false; // per stop() abgebrochen
-		int threads = 1;
 		long long nodes = 0;
 		double seconds = 0;
-		double wldSeconds = 0; // Zeit bis Sieg/Remis/Niederlage bewiesen war (Endspiel)
 	};
-
-	// Statische Bewertung aus Sicht von P (Spieler am Zug).
-	int evaluate(u64 P, u64 O);
-
-	// Stabile Steine von P (konservative Abschaetzung).
-	u64 stableDiscs(u64 P, u64 O);
 
 	class Engine
 	{
 	public:
-		explicit Engine(int ttBits = 21);
+		explicit Engine(int ttBits = 21) : tt(ttBits) {}
+
 		Result search(u64 P, u64 O, const Settings& s);
-		void stop();      // threadsicher: laufende (oder gleich startende) Suche abbrechen
-		void resetStop(); // vor dem Start einer neuen Suche aufrufen (vom aufrufenden Thread)
-		void clear();  // Transpositionstabelle leeren (nicht waehrend einer Suche)
+		void stop() { stopRequested = true; }       // threadsicher; wirkt auch kurz vor dem Start
+		void resetStop() { stopRequested = false; } // vor dem Start einer neuen Suche aufrufen
+		void clear() { tt.clear(); }                // nicht waehrend einer Suche
 
 	private:
 		friend struct Searcher;
-		struct TTSlot { std::atomic<u64> keyx{ 0 }; std::atomic<u64> data{ 0 }; };
+		using Clock = std::chrono::steady_clock;
 
-		int rootSearch(u64 P, u64 O, int* sq, int n, int depth, int alpha, int beta, int& bestIdx, bool checkTime);
+		struct RootMoves
+		{
+			int sq[32];
+			int n = 0;
+			void moveToFront(int idx);
+		};
 
-		std::unique_ptr<TTSlot[]> tt;
-		u64 ttMask;
+		static RootMoves rootMoves(u64 P, u64 O);
+		void iterativeDeepening(u64 P, u64 O, RootMoves& rm, int maxDepth, int empties, Result& res);
+		void solveEndgame(u64 P, u64 O, RootMoves& rm, int empties, Result& res);
+		int pickWithNoise(u64 P, u64 O, const RootMoves& rm, int depth, int noise);
+
+		int searchRoot(u64 P, u64 O, const RootMoves& rm, int depth, int alpha, int beta, int& bestIdx, bool checkTime);
+		int searchFirstRootMove(u64 P, u64 O, int sq, int depth, int alpha, int beta, bool checkTime);
+		int searchRemainingRootMoves(u64 P, u64 O, const RootMoves& rm, int depth, int alpha, int beta,
+		                             int best, int& bestIdx, bool checkTime);
+
+		TranspositionTable tt;
 		int nThreads = 1;
 		std::atomic<bool> abort{ false };
 		std::atomic<bool> stopRequested{ false };
 		std::atomic<long long> nodes{ 0 };
-		std::chrono::steady_clock::time_point deadline;
+		Clock::time_point deadline;
 	};
-
-	// Hilfsfunktion fuer die GUI: Bitboards fuer 'color' aus dem Brett holen und Zug suchen.
-	inline Result bestMove(Engine& e, const board& m, int8_t color, const Settings& s)
-	{
-		u64 P, O;
-		bb::load(m, color, P, O);
-		return e.search(P, O, s);
-	}
 }

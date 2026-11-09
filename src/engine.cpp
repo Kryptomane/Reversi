@@ -1,7 +1,10 @@
 #include "engine.h"
+#include "evaluation.h"
 #include <algorithm>
 #include <thread>
 #include <mutex>
+#include <vector>
+#include <random>
 
 namespace engine
 {
@@ -9,39 +12,14 @@ namespace engine
 
 	namespace
 	{
-		constexpr u64 CORNERS = bit(0, 0) | bit(0, 7) | bit(7, 0) | bit(7, 7);
+		constexpr int SMALL_ENDGAME = 6;        // bis hierhin rechnet solveSmall ohne Tabelle/Bewertung
+		constexpr int TT_MIN_DEPTH = 3;         // Tabelle erst ab dieser Resttiefe (sonst verdraengen flache Eintraege tiefe)
+		constexpr int MOBILITY_ORDER_DEPTH = 3; // ab dieser Resttiefe nach Gegner-Mobilitaet sortieren
+		constexpr int LAZY_SMP_MIN_DEPTH = 6;   // ab dieser Tiefe rechnen Helfer-Threads mit
+		constexpr int TT_MOVE_BONUS = 1000000;
 
-		// Pro Ecke: X-Feld und die beiden C-Felder.
-		struct CornerZone { u64 corner, x, c; };
-		constexpr CornerZone ZONES[4] = {
-			{ bit(0, 0), bit(1, 1), bit(0, 1) | bit(1, 0) },
-			{ bit(0, 7), bit(1, 6), bit(0, 6) | bit(1, 7) },
-			{ bit(7, 0), bit(6, 1), bit(6, 0) | bit(7, 1) },
-			{ bit(7, 7), bit(6, 6), bit(6, 7) | bit(7, 6) },
-		};
-
-		// Linienmasken fuer die Stabilitaet (Reihen, Spalten, beide Diagonalen).
-		struct Lines
-		{
-			u64 row[8], col[8], diag[15], anti[15];
-			Lines()
-			{
-				for (int i = 0; i < 8; i++) { row[i] = 0; col[i] = 0; }
-				for (int i = 0; i < 15; i++) { diag[i] = 0; anti[i] = 0; }
-				for (int x = 0; x < 8; x++)
-					for (int y = 0; y < 8; y++)
-					{
-						row[x] |= bit(x, y);
-						col[y] |= bit(x, y);
-						diag[x - y + 7] |= bit(x, y);
-						anti[x + y] |= bit(x, y);
-					}
-			}
-		};
-		const Lines LINES;
-
-		// Ordnungswerte fuer die Zugsortierung.
-		constexpr int SQV[64] = {
+		// Feldwerte fuer die Zugsortierung (Ecken zuerst, X-/C-Felder zuletzt).
+		constexpr int SQUARE_VALUE[64] = {
 			 100, -20,  10,   5,   5,  10, -20, 100,
 			 -20, -50,  -2,  -2,  -2,  -2, -50, -20,
 			  10,  -2,   1,   1,   1,   1,  -2,  10,
@@ -52,120 +30,66 @@ namespace engine
 			 100, -20,  10,   5,   5,  10, -20, 100,
 		};
 
-		inline u64 neighbours(u64 b)
+		// Endwert: Steindifferenz d aus Sicht von P; leere Felder e gehen an den Sieger.
+		int finalScore(int d, int e)
 		{
-			return shift<-1, -1>(b) | shift<-1, 0>(b) | shift<-1, 1>(b) | shift<0, -1>(b)
-				| shift<0, 1>(b) | shift<1, -1>(b) | shift<1, 0>(b) | shift<1, 1>(b);
-		}
-
-		inline u64 hashKey(u64 P, u64 O)
-		{
-			auto mix = [](u64 z) {
-				z += 0x9E3779B97F4A7C15ULL;
-				z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-				z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-				return z ^ (z >> 31);
-			};
-			return mix(P) ^ mix(O ^ 0x5851F42D4C957F2DULL);
-		}
-
-		inline int terminalScore(u64 P, u64 O)
-		{
-			const int p = popcount(P), o = popcount(O);
-			const int e = 64 - p - o;
-			if (p > o) return WIN + (p - o + e); // leere Felder gehen an den Sieger
-			if (p < o) return -WIN + (p - o - e);
+			if (d > 0) return WIN + d + e;
+			if (d < 0) return -WIN + d - e;
 			return 0;
 		}
+
+		int terminalScore(u64 P, u64 O)
+		{
+			return finalScore(popcount(P) - popcount(O), popcount(~(P | O)));
+		}
+
+		// Quadranten mit ungerader Zahl freier Felder: dort bekommt man meist den letzten Zug.
+		u64 oddQuadrants(u64 empty)
+		{
+			constexpr u64 QUADRANTS[4] = { 0x000000000F0F0F0FULL, 0x00000000F0F0F0F0ULL,
+			                               0x0F0F0F0F00000000ULL, 0xF0F0F0F000000000ULL };
+			u64 odd = 0;
+			for (u64 q : QUADRANTS)
+				if (popcount(empty & q) & 1)
+					odd |= q;
+			return odd;
+		}
+
+		// Zugliste eines Knotens mit Sortierschluesseln; umgedrehte Steine werden mitgemerkt.
+		struct MoveList
+		{
+			int sq[32];
+			int key[32];
+			u64 flip[32];
+			int n = 0;
+
+			void add(int s, int k, u64 f) { sq[n] = s; key[n] = k; flip[n] = f; n++; }
+
+			// Selection-Sort-Schritt: Zug mit hoechstem Schluessel ab Position i nach i holen.
+			void bringBestTo(int i)
+			{
+				int best = i;
+				for (int j = i + 1; j < n; j++)
+					if (key[j] > key[best]) best = j;
+				std::swap(sq[i], sq[best]);
+				std::swap(key[i], key[best]);
+				std::swap(flip[i], flip[best]);
+			}
+		};
 	}
 
-	u64 stableDiscs(u64 P, u64 O)
-	{
-		const u64 occ = P | O;
-		u64 fullH = 0, fullV = 0, fullD = 0, fullA = 0;
-		for (int i = 0; i < 8; i++)
-		{
-			if ((occ & LINES.row[i]) == LINES.row[i]) fullV |= LINES.row[i]; // Reihe x fest = Linie entlang y
-			if ((occ & LINES.col[i]) == LINES.col[i]) fullH |= LINES.col[i];
-		}
-		for (int i = 0; i < 15; i++)
-		{
-			if ((occ & LINES.diag[i]) == LINES.diag[i]) fullD |= LINES.diag[i];
-			if ((occ & LINES.anti[i]) == LINES.anti[i]) fullA |= LINES.anti[i];
-		}
-		// Ein Stein ist stabil, wenn auf jeder der 4 Achsen die Linie voll ist oder
-		// auf einer Seite ein stabiler eigener Stein bzw. der Rand liegt.
-		u64 st = 0;
-		for (;;)
-		{
-			const u64 a1 = fullV | nbFilled<0, -1>(st) | nbFilled<0, 1>(st);
-			const u64 a2 = fullH | nbFilled<-1, 0>(st) | nbFilled<1, 0>(st);
-			const u64 a3 = fullD | nbFilled<-1, -1>(st) | nbFilled<1, 1>(st);
-			const u64 a4 = fullA | nbFilled<-1, 1>(st) | nbFilled<1, -1>(st);
-			const u64 ns = P & a1 & a2 & a3 & a4;
-			if (ns == st) return st;
-			st = ns;
-		}
-	}
+	// ======================= Suche eines Threads =======================
 
-	int evaluate(u64 P, u64 O)
-	{
-		const u64 occ = P | O;
-		const u64 E = ~occ;
-		const int empties = popcount(E);
-
-		const int mP = popcount(moves(P, O));
-		const int mO = popcount(moves(O, P));
-
-		const u64 adjE = neighbours(E);
-		const int fP = popcount(P & adjE); // Frontsteine (an leere Felder angrenzend)
-		const int fO = popcount(O & adjE);
-
-		int s = 0;
-		s += 30 * (mP - mO);
-		s += 8 * (fO - fP);
-		s += 400 * (popcount(P & CORNERS) - popcount(O & CORNERS));
-
-		for (const CornerZone& z : ZONES)
-		{
-			if (occ & z.corner) continue;
-			s -= 150 * ((int)((P & z.x) != 0) - (int)((O & z.x) != 0));
-			s -= 40 * (popcount(P & z.c) - popcount(O & z.c));
-		}
-
-		if (occ & CORNERS) // Stabilitaet entsteht praktisch nur ueber Ecken
-			s += 60 * (popcount(stableDiscs(P, O)) - popcount(stableDiscs(O, P)));
-
-		if (empties < 24) // Steinzahl zaehlt erst gegen Ende
-			s += (24 - empties) * (popcount(P) - popcount(O));
-		return s;
-	}
-
-	// ---------------- Transpositionstabelle (lock-frei: keyx = key ^ data) ----------------
-	namespace
-	{
-		struct TTData { int score; int depth; int flag; int move; }; // flag 1 exakt, 2 untere, 3 obere Schranke
-
-		inline u64 pack(int score, int depth, int flag, int move)
-		{
-			return (u64)(uint32_t)score | ((u64)(uint8_t)depth << 32) | ((u64)(uint8_t)flag << 40) | ((u64)(uint8_t)(int8_t)move << 48);
-		}
-		inline TTData unpack(u64 d)
-		{
-			return { (int)(int32_t)(uint32_t)(d & 0xFFFFFFFFULL), (int)(int8_t)(uint8_t)(d >> 32), (int)(uint8_t)(d >> 40), (int)(int8_t)(uint8_t)(d >> 48) };
-		}
-	}
-
-	// Suchzustand eines Threads.
 	struct Searcher
 	{
 		Engine& e;
 		bool checkTime;
-		const std::atomic<bool>* phaseStop; // nur Helfer: Abbruch, wenn der Haupt-Thread fertig ist
-		int noise;                          // Helfer: veraenderte Zugsortierung (Lazy SMP)
+		const std::atomic<bool>* phaseStop; // Helfer: Abbruch, sobald der Haupt-Thread fertig ist
+		int orderingNoise;                  // Helfer: abweichende Zugsortierung (Lazy SMP)
 		long long nodes = 0;
 
-		Searcher(Engine& eng, bool ct, const std::atomic<bool>* ps = nullptr, int nz = 0) : e(eng), checkTime(ct), phaseStop(ps), noise(nz) {}
+		Searcher(Engine& eng, bool ct, const std::atomic<bool>* ps = nullptr, int noise = 0)
+			: e(eng), checkTime(ct), phaseStop(ps), orderingNoise(noise) {}
 		~Searcher() { e.nodes += nodes; }
 
 		bool halted() const
@@ -176,218 +100,213 @@ namespace engine
 		bool timeUp()
 		{
 			if (checkTime && (nodes & 1023) == 0)
-				if (e.stopRequested.load(std::memory_order_relaxed) || std::chrono::steady_clock::now() > e.deadline)
+				if (e.stopRequested.load(std::memory_order_relaxed) || Engine::Clock::now() > e.deadline)
 					e.abort.store(true, std::memory_order_relaxed);
 			return halted();
 		}
 
-		bool probe(u64 key, TTData& d)
-		{
-			Engine::TTSlot& s = e.tt[key & e.ttMask];
-			const u64 data = s.data.load(std::memory_order_relaxed);
-			const u64 keyx = s.keyx.load(std::memory_order_relaxed);
-			if ((keyx ^ data) != key || data == 0) return false;
-			d = unpack(data);
-			return d.flag != 0;
-		}
-
-		void store(u64 key, int score, int depth, int flag, int move)
-		{
-			Engine::TTSlot& s = e.tt[key & e.ttMask];
-			const u64 data = pack(score, depth, flag, move);
-			s.data.store(data, std::memory_order_relaxed);
-			s.keyx.store(key ^ data, std::memory_order_relaxed);
-		}
-
-		// Exakte Rechnung fuer die letzten Felder: ohne TT/Bewertung, nur Steindifferenz.
-		int solveSmall(u64 P, u64 O, int alpha, int beta, bool passed)
+		// Genau ein freies Feld m: Ergebnis direkt aus der Zahl umgedrehter Steine.
+		int solveLastMove(u64 P, u64 O, u64 m)
 		{
 			nodes++;
+			const int d = 2 * popcount(P) - 63; // Differenz P - O ohne das freie Feld
+			if (u64 f = flips(P, O, m)) return finalScore(d + 2 * popcount(f) + 1, 0);
+			if (u64 f = flips(O, P, m)) return finalScore(d - 2 * popcount(f) - 1, 0); // P passt, O setzt
+			return finalScore(d, 1);                                                    // keiner kann setzen
+		}
+
+		// Exakte Rechnung fuer die letzten Felder (Paritaets-Sortierung, keine Tabelle).
+		int solveSmall(u64 P, u64 O, int alpha, int beta, bool passed)
+		{
+			const u64 empty = ~(P | O);
+			if (!passed && (empty & (empty - 1)) == 0)
+				return solveLastMove(P, O, empty);
+			nodes++;
 			if (timeUp()) return 0;
-			u64 mv = moves(P, O);
+
+			const u64 mv = moves(P, O);
 			if (!mv)
+				return passed ? terminalScore(P, O) : -solveSmall(O, P, -beta, -alpha, true);
+
+			const u64 odd = oddQuadrants(empty);
+			int best = -INF;
+			for (u64 group : { mv & odd, mv & ~odd })
 			{
-				if (passed) return terminalScore(P, O);
-				return -solveSmall(O, P, -beta, -alpha, true);
-			}
-			int best = -WIN - 64;
-			while (mv)
-			{
-				const u64 m = mv & (0 - mv);
-				mv &= mv - 1;
-				const u64 f = flips(P, O, m);
-				const int v = -solveSmall(O & ~f, P | f | m, -beta, -alpha, false);
-				if (halted()) return 0;
-				if (v > best)
+				for (; group; group &= group - 1)
 				{
-					best = v;
-					if (v > alpha) { alpha = v; if (alpha >= beta) break; }
+					const Position next = play(P, O, group & (0 - group));
+					const int v = -solveSmall(next.P, next.O, -beta, -alpha, false);
+					if (halted()) return 0;
+					if (v > best)
+					{
+						best = v;
+						if (v > alpha) { alpha = v; if (alpha >= beta) return best; }
+					}
 				}
 			}
 			return best;
+		}
+
+		// Tabelle abfragen: liefert true, wenn der gespeicherte Wert den Knoten schon entscheidet.
+		bool probeTable(u64 key, int depth, int alpha, int beta, int& ttMove, int& score)
+		{
+			TTEntry t;
+			if (!e.tt.probe(key, t))
+				return false;
+			ttMove = t.move;
+			if (t.depth < depth)
+				return false;
+			score = t.score;
+			return t.bound == Bound::Exact || (t.bound == Bound::Lower && score >= beta) || (t.bound == Bound::Upper && score <= alpha);
+		}
+
+		// Sortierung: Tabellen-Zug zuerst, sonst Feldwert und (tiefer im Baum) wenig Gegnerzuege.
+		MoveList orderMoves(u64 P, u64 O, u64 mv, int depth, int ttMove)
+		{
+			MoveList list;
+			const bool byMobility = depth >= MOBILITY_ORDER_DEPTH;
+			for (; mv; mv &= mv - 1)
+			{
+				const int s = lsb(mv);
+				const u64 m = 1ULL << s;
+				const u64 f = byMobility ? flips(P, O, m) : 0;
+				int k = SQUARE_VALUE[s];
+				if (orderingNoise)
+					k += (int)((TranspositionTable::hash(P ^ (u64)orderingNoise, O ^ (u64)s) >> 40) & 31) - 16;
+				if (s == ttMove)
+					k += TT_MOVE_BONUS;
+				else if (byMobility)
+					k -= 16 * popcount(moves(O & ~f, P | f | m));
+				list.add(s, k, f);
+			}
+			return list;
+		}
+
+		// Principal Variation Search fuer einen Kindknoten: erster Zug mit vollem Fenster,
+		// die anderen erst mit Nullfenster pruefen und nur bei Bedarf genau nachrechnen.
+		int searchChild(u64 nP, u64 nO, int depth, int alpha, int beta, bool first)
+		{
+			if (first)
+				return -negamax(nP, nO, depth - 1, -beta, -alpha, false);
+			int v = -negamax(nP, nO, depth - 1, -alpha - 1, -alpha, false);
+			if (v > alpha && v < beta && !halted())
+				v = -negamax(nP, nO, depth - 1, -beta, -alpha, false);
+			return v;
 		}
 
 		int negamax(u64 P, u64 O, int depth, int alpha, int beta, bool passed)
 		{
 			const int empties = popcount(~(P | O));
-			if (depth >= empties && empties <= 6)
+			if (depth >= empties && empties <= SMALL_ENDGAME)
 				return solveSmall(P, O, alpha, beta, passed);
 
 			nodes++;
 			if (timeUp()) return 0;
-			if (depth <= 0) return evaluate(P, O);
+			if (depth <= 0) return eval::evaluate(P, O);
 
-			u64 mv = moves(P, O);
-			if (!mv)
-			{
-				if (passed) return terminalScore(P, O);
-				return -negamax(O, P, depth, -beta, -alpha, true); // Passen kostet keine Tiefe
-			}
+			const u64 mv = moves(P, O);
+			if (!mv) // passen kostet keine Tiefe; koennen beide nicht, ist das Spiel aus
+				return passed ? terminalScore(P, O) : -negamax(O, P, depth, -beta, -alpha, true);
 
-			const u64 key = hashKey(P, O);
-			int ttMove = -1;
-			TTData td;
-			if (probe(key, td))
-			{
-				ttMove = td.move;
-				if (td.depth >= depth)
-				{
-					if (td.flag == 1) return td.score;
-					if (td.flag == 2 && td.score >= beta) return td.score;
-					if (td.flag == 3 && td.score <= alpha) return td.score;
-				}
-			}
+			const u64 key = TranspositionTable::hash(P, O);
+			const bool useTable = depth >= TT_MIN_DEPTH;
+			int ttMove = -1, ttScore = 0;
+			if (useTable && probeTable(key, depth, alpha, beta, ttMove, ttScore))
+				return ttScore;
 
-			int sq[32], key2[32], n = 0;
-			while (mv)
-			{
-				const int s = lsb(mv);
-				mv &= mv - 1;
-				int k = SQV[s];
-				if (noise) k += (int)((hashKey(P ^ (u64)noise, O ^ (u64)s) >> 40) & 31) - 16; // Helfer weichen ab
-				if (s == ttMove) k += 1000000;
-				else if (depth >= 3)
-				{
-					const u64 m = 1ULL << s;
-					const u64 f = flips(P, O, m);
-					k -= 16 * popcount(moves(O & ~f, P | f | m)); // wenig Gegnerzuege zuerst
-				}
-				sq[n] = s; key2[n] = k; n++;
-			}
-
+			MoveList list = orderMoves(P, O, mv, depth, ttMove);
 			const int alphaOrig = alpha;
-			int best = -WIN - 64;
-			int bestMove = sq[0];
-			for (int i = 0; i < n; i++)
+			int best = -INF, bestMove = list.sq[0];
+			for (int i = 0; i < list.n; i++)
 			{
-				int bi = i;
-				for (int j = i + 1; j < n; j++) if (key2[j] > key2[bi]) bi = j;
-				std::swap(sq[i], sq[bi]); std::swap(key2[i], key2[bi]);
-
-				const u64 m = 1ULL << sq[i];
-				const u64 f = flips(P, O, m);
-				const u64 nP = O & ~f, nO = P | f | m;
-				int v;
-				if (i == 0)
-					v = -negamax(nP, nO, depth - 1, -beta, -alpha, false);
-				else
-				{
-					v = -negamax(nP, nO, depth - 1, -alpha - 1, -alpha, false); // Nullfenster (PVS)
-					if (v > alpha && v < beta && !halted())
-						v = -negamax(nP, nO, depth - 1, -beta, -alpha, false);
-				}
+				list.bringBestTo(i);
+				const u64 m = 1ULL << list.sq[i];
+				const u64 f = depth >= MOBILITY_ORDER_DEPTH ? list.flip[i] : flips(P, O, m);
+				const int v = searchChild(O & ~f, P | f | m, depth, alpha, beta, i == 0);
 				if (halted()) return 0;
 				if (v > best)
 				{
 					best = v;
-					bestMove = sq[i];
+					bestMove = list.sq[i];
 					if (v > alpha) { alpha = v; if (alpha >= beta) break; }
 				}
 			}
 
-			store(key, best, depth, best <= alphaOrig ? 3 : (best >= beta ? 2 : 1), bestMove);
+			if (useTable)
+			{
+				const Bound b = best <= alphaOrig ? Bound::Upper : (best >= beta ? Bound::Lower : Bound::Exact);
+				e.tt.store(key, { best, depth, b, bestMove });
+			}
 			return best;
 		}
 	};
 
-	Engine::Engine(int ttBits) : tt(new TTSlot[size_t(1) << ttBits]), ttMask((u64(1) << ttBits) - 1) {}
+	// ======================= Wurzel =======================
 
-	void Engine::clear()
+	void Engine::RootMoves::moveToFront(int idx)
 	{
-		for (u64 i = 0; i <= ttMask; i++)
+		std::rotate(sq, sq + idx, sq + idx + 1);
+	}
+
+	Engine::RootMoves Engine::rootMoves(u64 P, u64 O)
+	{
+		RootMoves rm;
+		for (u64 mv = moves(P, O); mv; mv &= mv - 1)
+			rm.sq[rm.n++] = lsb(mv);
+		std::sort(rm.sq, rm.sq + rm.n, [](int a, int b) { return SQUARE_VALUE[a] > SQUARE_VALUE[b]; });
+		return rm;
+	}
+
+	// Erster (vermutlich bester) Wurzelzug. Lazy SMP: Helfer rechnen denselben Teilbaum mit
+	// anderer Sortierung (teils eine Tiefe mehr) und fuellen die Tabelle; ihr Ergebnis wird verworfen.
+	int Engine::searchFirstRootMove(u64 P, u64 O, int sq, int depth, int alpha, int beta, bool checkTime)
+	{
+		const Position child = play(P, O, 1ULL << sq);
+		std::atomic<bool> mainDone{ false };
+		std::vector<std::thread> helpers;
+		if (depth >= LAZY_SMP_MIN_DEPTH)
+			for (int t = 1; t < nThreads; t++)
+				helpers.emplace_back([&, t]() {
+					Searcher h(*this, checkTime, &mainDone, t * 7919);
+					h.negamax(child.P, child.O, depth - 1 + (t & 1), -beta, -alpha, false);
+				});
+		int value;
 		{
-			tt[i].keyx.store(0, std::memory_order_relaxed);
-			tt[i].data.store(0, std::memory_order_relaxed);
+			Searcher s(*this, checkTime);
+			value = -s.negamax(child.P, child.O, depth - 1, -beta, -alpha, false);
 		}
+		mainDone = true;
+		for (auto& t : helpers) t.join();
+		return value;
 	}
 
-	void Engine::stop()
+	// Restliche Wurzelzuege parallel; alle Threads teilen sich alpha und den besten Wert.
+	int Engine::searchRemainingRootMoves(u64 P, u64 O, const RootMoves& rm, int depth, int alpha, int beta,
+	                                     int best, int& bestIdx, bool checkTime)
 	{
-		stopRequested = true;
-	}
-
-	void Engine::resetStop()
-	{
-		stopRequested = false;
-	}
-
-	// Eine Iteration an der Wurzel. Erster Zug allein (setzt alpha), Rest parallel mit gemeinsamem alpha.
-	int Engine::rootSearch(u64 P, u64 O, int* sq, int n, int depth, int alpha, int beta, int& bestIdx, bool checkTime)
-	{
-		bestIdx = 0;
-		int best;
-		{
-			const u64 m = 1ULL << sq[0];
-			const u64 f = flips(P, O, m);
-			const u64 nP = O & ~f, nO = P | f | m;
-			// Lazy SMP: Helfer rechnen denselben Teilbaum mit anderer Sortierung (teils eine Tiefe mehr)
-			// und fuellen die gemeinsame Tabelle; ihr Ergebnis wird verworfen.
-			std::atomic<bool> mainDone{ false };
-			std::vector<std::thread> helpers;
-			if (depth >= 6)
-				for (int t = 1; t < nThreads; t++)
-					helpers.emplace_back([&, t]() {
-						Searcher h(*this, checkTime, &mainDone, t * 7919);
-						h.negamax(nP, nO, depth - 1 + (t & 1), -beta, -alpha, false);
-					});
-			{
-				Searcher s(*this, checkTime);
-				best = -s.negamax(nP, nO, depth - 1, -beta, -alpha, false);
-			}
-			mainDone = true;
-			for (auto& t : helpers) t.join();
-		}
-		if (abort || n == 1) return best;
-		if (best > alpha) alpha = best;
-		if (alpha >= beta) return best;
-
 		std::mutex mtx;
 		std::atomic<int> next{ 1 };
-		int sharedAlpha = alpha, sharedBest = best, sharedIdx = 0;
+		int sharedAlpha = alpha, sharedBest = best, sharedIdx = bestIdx;
+		auto currentAlpha = [&]() { std::lock_guard<std::mutex> lk(mtx); return sharedAlpha; };
 
 		auto worker = [&]() {
 			Searcher s(*this, checkTime);
 			for (;;)
 			{
 				const int i = next.fetch_add(1);
-				if (i >= n || abort) break;
-				int a;
-				{ std::lock_guard<std::mutex> lk(mtx); a = sharedAlpha; }
+				if (i >= rm.n || abort) break;
+				const int a = currentAlpha();
 				if (a >= beta) break;
-				const u64 m = 1ULL << sq[i];
-				const u64 f = flips(P, O, m);
-				const u64 nP = O & ~f, nO = P | f | m;
-				int v = -s.negamax(nP, nO, depth - 1, -a - 1, -a, false); // Nullfenster
+				const Position child = play(P, O, 1ULL << rm.sq[i]);
+				int v = -s.negamax(child.P, child.O, depth - 1, -a - 1, -a, false); // Nullfenster
 				if (abort) break;
 				if (v > a && v < beta)
 				{
-					// Zug ist besser als das alpha beim Start (untere Schranke). Ein anderer Thread kann
-					// alpha inzwischen erhoeht haben -> mit aktuellem alpha nachrechnen, sonst waere der
-					// Wert nur eine Schranke und der Zug koennte zu Unrecht verworfen werden.
-					int a2;
-					{ std::lock_guard<std::mutex> lk(mtx); a2 = sharedAlpha; }
+					// Besser als alpha beim Start: mit dem aktuellen alpha genau nachrechnen. Ein anderer
+					// Thread kann alpha erhoeht haben; ohne Nachrechnen waere v nur eine Schranke.
+					const int a2 = currentAlpha();
 					if (a2 >= beta) break;
-					v = -s.negamax(nP, nO, depth - 1, -beta, -a2, false);
+					v = -s.negamax(child.P, child.O, depth - 1, -beta, -a2, false);
 					if (abort) break;
 				}
 				std::lock_guard<std::mutex> lk(mtx);
@@ -395,15 +314,14 @@ namespace engine
 				{
 					sharedBest = v;
 					sharedIdx = i;
-					if (v > sharedAlpha) sharedAlpha = v;
+					sharedAlpha = std::max(sharedAlpha, v);
 				}
 			}
 		};
 
-		const int helpers = std::min(nThreads, n - 1) - 1;
 		std::vector<std::thread> pool;
-		pool.reserve(std::max(0, helpers));
-		for (int t = 0; t < helpers; t++) pool.emplace_back(worker);
+		for (int t = 1; t < std::min(nThreads, rm.n - 1); t++)
+			pool.emplace_back(worker);
 		worker();
 		for (auto& t : pool) t.join();
 
@@ -411,94 +329,175 @@ namespace engine
 		return sharedBest;
 	}
 
-	Result Engine::search(u64 P, u64 O, const Settings& s)
+	// Eine Iteration an der Wurzel; bestIdx = Index des besten Zugs in rm.
+	int Engine::searchRoot(u64 P, u64 O, const RootMoves& rm, int depth, int alpha, int beta, int& bestIdx, bool checkTime)
 	{
-		using clock = std::chrono::steady_clock;
-		const auto start = clock::now();
-		nodes = 0;
-		abort = false;
-		// stopRequested wird hier bewusst NICHT zurueckgesetzt: ein stop(), das kurz vor dem Start
-		// kam, soll wirken. Zuruecksetzen per resetStop() vor dem Start.
-		nThreads = s.threads > 0 ? s.threads : std::max(1, (int)std::thread::hardware_concurrency());
-		Result res;
-		res.threads = nThreads;
+		bestIdx = 0;
+		const int best = searchFirstRootMove(P, O, rm.sq[0], depth, alpha, beta, checkTime);
+		if (abort || rm.n == 1) return best;
+		alpha = std::max(alpha, best);
+		if (alpha >= beta) return best;
+		return searchRemainingRootMoves(P, O, rm, depth, alpha, beta, best, bestIdx, checkTime);
+	}
 
-		u64 mv = moves(P, O);
-		if (!mv || stopRequested) return res;
+	// ======================= Ablauf eines Suchauftrags =======================
 
-		int sq[32], n = 0;
-		while (mv) { sq[n++] = lsb(mv); mv &= mv - 1; }
-		std::sort(sq, sq + n, [](int a, int b) { return SQV[a] > SQV[b]; });
-		res.move = sq[0];
-		if (n == 1) return res; // nur ein Zug moeglich: sofort spielen
-
-		const int empties = popcount(~(P | O));
-		const bool endgame = empties <= s.endgameEmpties && s.maxDepth >= empties;
-
-		// Mittelspiel: iterative Vertiefung. Im Endspiel nur kurz (Zugsortierung + Rueckfall).
-		deadline = start + std::chrono::milliseconds(endgame ? std::max(1, s.timeMs / 10) : s.timeMs);
-		const int maxDepth = std::min(s.maxDepth, endgame ? std::min(empties - 1, 12) : empties);
+	// Tiefe 1, 2, 3, ... bis maxDepth oder Zeitende; jede Iteration sortiert die naechste vor.
+	void Engine::iterativeDeepening(u64 P, u64 O, RootMoves& rm, int maxDepth, int empties, Result& res)
+	{
 		for (int depth = 1; depth <= maxDepth; depth++)
 		{
 			int bestIdx;
-			const int best = rootSearch(P, O, sq, n, depth, -WIN - 64, WIN + 64, bestIdx, depth > 1); // Tiefe 1 immer fertig
-			if (abort) break;
-			std::rotate(sq, sq + bestIdx, sq + bestIdx + 1); // bester Zug nach vorne
-			res.move = sq[0];
+			const int best = searchRoot(P, O, rm, depth, -INF, INF, bestIdx, depth > 1); // Tiefe 1 immer fertig
+			if (abort) return;
+			rm.moveToFront(bestIdx);
+			res.move = rm.sq[0];
 			res.score = best;
 			res.depth = depth;
-			res.exact = depth >= empties; // bis zum Spielende gerechnet
-			res.wld = !res.exact && (best >= WIN - 64 || best <= -WIN + 64); // Sieg/Niederlage erzwungen
-			if (res.exact || res.wld) break; // tiefer bringt im Mittelspiel nichts mehr
+			res.exact = depth >= empties;
+			res.wld = !res.exact && isProvenResult(best);
+			if (res.exact || res.wld) return; // tiefer rechnen aendert nichts mehr
 		}
+	}
+
+	// Bis zum Spielende: erst Sieg/Remis/Niederlage (enges Fenster, schnell), dann mit der
+	// Restzeit die genaue Steindifferenz. Bei Zeitende bleibt das bisher beste Ergebnis.
+	void Engine::solveEndgame(u64 P, u64 O, RootMoves& rm, int empties, Result& res)
+	{
+		res.wld = false;
+		abort = false;
+		int bestIdx;
+		const int wld = searchRoot(P, O, rm, empties, -1, 1, bestIdx, true);
+		if (abort) return;
+
+		if (wld > -1) // Gewinn oder Remis gesichert -> diesen Zug auf jeden Fall nehmen
+		{
+			rm.moveToFront(bestIdx);
+			res.move = rm.sq[0];
+			res.score = wld;
+			res.depth = empties;
+			res.wld = true;
+		}
+		const int exact = searchRoot(P, O, rm, empties, -INF, INF, bestIdx, true);
+		if (!abort)
+		{
+			res.move = rm.sq[bestIdx];
+			res.score = exact;
+			res.depth = empties;
+			res.exact = true;
+			res.wld = false;
+		}
+		else if (wld <= -1) // verloren, aber knappste Niederlage nicht gefunden: Mittelspielzug behalten
+		{
+			res.score = wld;
+			res.wld = true;
+		}
+	}
+
+	// Schwache Stufen: alle Wurzelzuege genau bewerten, Rauschen addieren, besten waehlen.
+	// Bewiesene Siege/Niederlagen werden nicht verrauscht. Liefert -1 bei Abbruch.
+	int Engine::pickWithNoise(u64 P, u64 O, const RootMoves& rm, int depth, int noise)
+	{
+		static thread_local std::mt19937 rng{ std::random_device{}() };
+		std::uniform_int_distribution<int> dist(-noise, noise);
+		Searcher s(*this, true);
+		int bestIdx = 0, best = 0;
+		for (int i = 0; i < rm.n; i++)
+		{
+			const Position child = play(P, O, 1ULL << rm.sq[i]);
+			int v = -s.negamax(child.P, child.O, depth - 1, -INF, INF, false);
+			if (abort) return -1;
+			if (!isProvenResult(v))
+				v += dist(rng);
+			if (i == 0 || v > best) { best = v; bestIdx = i; }
+		}
+		return bestIdx;
+	}
+
+	Result Engine::search(u64 P, u64 O, const Settings& s)
+	{
+		const auto start = Clock::now();
+		nodes = 0;
+		abort = false;
+		nThreads = s.threads > 0 ? s.threads : std::max(1, (int)std::thread::hardware_concurrency());
+		Result res;
+		auto finish = [&]() {
+			res.stopped = stopRequested;
+			res.nodes = nodes;
+			res.seconds = std::chrono::duration<double>(Clock::now() - start).count();
+			return res;
+		};
+
+		RootMoves rm = rootMoves(P, O);
+		if (rm.n == 0 || stopRequested) return finish();
+		res.move = rm.sq[0];
+		if (rm.n == 1) return finish(); // nur ein Zug moeglich: sofort spielen
+
+		const int empties = popcount(~(P | O));
+		const bool endgame = empties <= s.endgameEmpties;
+
+		// Im Endspiel nur kurz vorsortieren (10 % der Zeit), dann bis zum Ende rechnen.
+		deadline = start + std::chrono::milliseconds(endgame ? std::max(1, s.timeMs / 10) : s.timeMs);
+		const int maxDepth = std::min(s.maxDepth, endgame ? std::min(empties - 1, 12) : empties);
+		iterativeDeepening(P, O, rm, maxDepth, empties, res);
 
 		if (endgame && !res.exact && !stopRequested)
 		{
-			res.wld = false;
 			deadline = start + std::chrono::milliseconds(s.timeMs);
-			abort = false;
-			// 1) Sieg/Remis/Niederlage (enges Fenster, schnell)
-			int bestIdx;
-			const int wld = rootSearch(P, O, sq, n, empties, -1, 1, bestIdx, true);
-			res.wldSeconds = std::chrono::duration<double>(clock::now() - start).count();
-			if (!abort && wld > -1) // Gewinn oder Remis gesichert -> diesen Zug nehmen
-			{
-				std::rotate(sq, sq + bestIdx, sq + bestIdx + 1);
-				res.move = sq[0];
-				res.score = wld;
-				res.depth = empties;
-				res.wld = true;
-				// 2) mit der Restzeit die Steindifferenz maximieren
-				const int exact = rootSearch(P, O, sq, n, empties, -WIN - 64, WIN + 64, bestIdx, true);
-				if (!abort)
-				{
-					res.move = sq[bestIdx];
-					res.score = exact;
-					res.exact = true;
-					res.wld = false;
-				}
-			}
-			else if (!abort) // alles verloren: knappste Niederlage suchen, sonst Mittelspielzug
-			{
-				const int exact = rootSearch(P, O, sq, n, empties, -WIN - 64, WIN + 64, bestIdx, true);
-				if (!abort)
-				{
-					res.move = sq[bestIdx];
-					res.score = exact;
-					res.depth = empties;
-					res.exact = true;
-				}
-				else
-				{
-					res.score = wld;
-					res.wld = true;
-				}
-			}
+			solveEndgame(P, O, rm, empties, res);
 		}
 
-		res.stopped = stopRequested;
-		res.nodes = nodes;
-		res.seconds = std::chrono::duration<double>(clock::now() - start).count();
-		return res;
+		if (s.noise > 0 && !res.exact && !res.wld && res.depth > 0 && !stopRequested)
+		{
+			const int idx = pickWithNoise(P, O, rm, res.depth, s.noise);
+			if (idx >= 0) res.move = rm.sq[idx];
+		}
+		return finish();
+	}
+
+	// ======================= Spielstaerke-Stufen =======================
+
+	namespace
+	{
+		struct Level { int depth; int noise; int endgame; }; // Namen der Stufen stehen in der GUI
+
+		// Rauschen in Bewertungseinheiten (Ecke = 400, ein Zug Mobilitaet = 30).
+		// Kalibriert per Testpartien: jede Stufe gewinnt etwa 80-90 % gegen die darunter.
+		constexpr Level LEVEL_TABLE[LEVELS] = {
+			//  Tiefe Rauschen Endspiel
+			{  1, 2000,  0 },  //  1 Anfaenger
+			{  1,  700,  0 },  //  2 Leicht
+			{  1,  150,  0 },  //  3 Leicht+
+			{  2,  220,  0 },  //  4 Mittel
+			{  3,  160,  6 },  //  5 Mittel+
+			{  4,   70,  8 },  //  6 Fortgeschritten
+			{  5,   15, 10 },  //  7 Stark
+			{  7,    0, 12 },  //  8 Sehr stark
+			{  9,    0, 16 },  //  9 Experte
+			{ 12,    0, 18 },  // 10 Meister
+		};
+
+		const Level& levelData(int level) { return LEVEL_TABLE[std::clamp(level, 1, LEVELS) - 1]; }
+	}
+
+	Settings levelSettings(int level)
+	{
+		const Level& l = levelData(level);
+		Settings s;
+		s.maxDepth = l.depth;
+		s.noise = l.noise;
+		s.endgameEmpties = l.endgame;
+		s.timeMs = 10000; // nur Notbremse auf sehr langsamen Geraeten
+		return s;
+	}
+
+	Settings hintSettings(int level)
+	{
+		const Level& l = levelData(level);
+		Settings s;
+		s.maxDepth = std::min(16, std::max(8, 2 * l.depth + 2)); // mind. doppelte Tiefe, nie unter 8
+		s.endgameEmpties = std::min(20, std::max(16, l.endgame + 4));
+		s.timeMs = 3000;                                          // Tipp soll schnell da sein
+		return s;
 	}
 }

@@ -1,76 +1,71 @@
-#ifndef REVERSIGUI_H
-#define REVERSIGUI_H
+#pragma once
+// Hauptfenster: Mensch (Schwarz) gegen PC (Weiss). Die Engine rechnet in einem Hintergrund-Thread,
+// damit die Oberflaeche nie haengt; Ergebnisse kommen per Qt-Ereignis zurueck.
 
 #include <QWidget>
-#include <QEvent>
-#include <QKeyEvent>
-#include "commonincludes.h"
-#include "calculation.h"
-#include "ui_reversigui.h"
-#include "engine.h"
-#include <chrono>
 #include <thread>
-#include <QComboBox>
-#include <QCheckBox>
+#include "engine.h"
+#include "game.h"
 
-namespace Ui {
-class ReversiGui;
-}
+namespace Ui { class ReversiGui; }
+class QCloseEvent;
 
 class ReversiGui : public QWidget
 {
-    Q_OBJECT
+	Q_OBJECT
 
 public:
-    explicit ReversiGui(QWidget *parent = 0);
-    ~ReversiGui();
+	explicit ReversiGui(QWidget* parent = nullptr);
+	~ReversiGui() override;
 
-public slots:
-	void terminate();
-	void startNewGame();
-	void onFieldClicked(int x, int y); // Klick/Tipp auf ein Feld
+protected:
+	bool eventFilter(QObject* object, QEvent* e) override; // Android-Zurueck-Geste abfangen
+	void closeEvent(QCloseEvent* e) override;
 
 private:
-	bool eventFilter(QObject *object, QEvent *e);
-	void init();
-	void makeNewLog();
-	void updateBoard(bool last);
-	void logic(field kandidat);   // alte PC-gegen-PC-Schleife, nur noch fuer training()
-	void training();              // Parameter-Training der alten Suche (silasindustries)
-	void afterMove();             // Spieler wechseln / passen / Spielende, dann ggf. PC ziehen lassen
-	bool isPC(int color) const;
-	void showStatus(const QString& text);
-	void startSearch(bool hint);                                      // Suche im Hintergrund-Thread (PC-Zug oder Tipp)
-	void onSearchResult(const engine::Result& r, int posId, bool hint); // laeuft wieder im GUI-Thread
-	void stopSearch();                                                // laufende Suche abbrechen und warten
+	enum class SearchKind { ComputerMove, Hint };
+
+	static constexpr Color HUMAN = Color::Black;
+
+	// Ablauf
+	void startNewGame();
+	void onFieldClicked(int x, int y);
+	void handleTurn(Game::Turn turn);          // nach jedem Zug: Anzeige, Status, ggf. PC/Tipp starten
+
+	// Engine im Hintergrund
+	void startSearch(SearchKind kind);
+	void onSearchResult(const engine::Result& r, int forPosition, SearchKind kind);
+	void stopSearch();
+
+	// Einstellungen
+	void setupLevelBox();
 	void onHintToggled(bool on);
-	bool humanToMove() const;
+	int level() const;
 
-	Ui::ReversiGui *ui;
-	calc game;
-	calc game2;
-		
-	int numPCgamers;   // 0 = Mensch gegen Mensch, 1 = Mensch gegen PC, 2 = PC gegen PC
-	int actualColor;   // 1 = Schwarz, 2 = Weiss
-	int humanColor;    // bei numPCgamers == 1
-	bool busy;         // PC rechnet gerade
-	bool gameOver;
+	// Anzeige
+	void updateView();
+	void showStatus(const QString& text);
+	static QString colorName(Color c);
+	QString gameOverText() const;
+	static QString provenResultText(const engine::Result& r);
 
+	// Beenden
+	void confirmQuit();
+	void quit();
+
+	bool isComputer(Color c) const { return c != HUMAN; }
+	bool humanToMove() const { return !game.isOver() && !computerThinking && !isComputer(game.toMove()); }
+
+	Ui::ReversiGui* ui;
+	Game game;
 	engine::Engine ai;
-	engine::Settings aiSettings;
 	std::thread searchThread;
-	int posId = 0;           // wird bei jeder Stellungsaenderung erhoeht -> veraltete Ergebnisse verwerfen
+
+	int positionId = 0;            // steigt bei jeder neuen Stellung -> veraltete Ergebnisse verwerfen
+	bool computerThinking = false;
 	bool hintRunning = false;
-	int hintSquare = -1;     // Feldindex x*8+y des empfohlenen Zugs, -1 = keiner
-	QString lastPcInfo;
-	QLabel* timeLabel = nullptr;
-	QComboBox* timeBox = nullptr;
-	QCheckBox* hintBox = nullptr;
-	
-
-	std::ofstream logfile;
-	tl::TinyLog testfile;
-	QString exportDirectory;
+	int hintSquare = -1;           // Feldindex des Zugvorschlags, -1 = keiner
+	QString lastResultInfo;        // z. B. "Der PC gewinnt bei bestem Spiel."
+	bool quitDialogOpen = false;
+	bool quitConfirmed = false;
 };
-
-#endif // REVERSIGUI_H

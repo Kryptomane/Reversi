@@ -1,13 +1,7 @@
 #pragma once
-// Spielbrett als eigenes Widget: zeichnet mit QPainter (skaliert auf jede Groesse, scharf auf
-// hochaufloesenden Displays) und meldet angeklickte/angetippte Felder.
+// Spielbrett-Widget: zeichnet mit QPainter (skaliert auf jede Groesse) und meldet angetippte Felder.
 #include <QWidget>
-#include "reversi_core.h"
-
-class QPainter;
-
-// Zeichnet das Brett in das Quadrat r. hint = Feldindex x*8+y fuer den Tipp-Rahmen, -1 = keiner.
-void drawBoard(QPainter& p, const QRectF& r, const board& m, int hint);
+#include "bitboard.h"
 
 class BoardWidget : public QWidget
 {
@@ -15,7 +9,10 @@ class BoardWidget : public QWidget
 
 public:
 	explicit BoardWidget(QWidget* parent = nullptr);
-	void setBoard(const board& m, int hint);
+
+	// markers = Felder mit Zugpunkt, hint = Feldindex fuer den Tipp-Rahmen (-1 = keiner)
+	void setPosition(bb::u64 black, bb::u64 white, bb::u64 markers, int hint);
+
 	QSize sizeHint() const override { return QSize(400, 400); }
 	QSize minimumSizeHint() const override { return QSize(160, 160); }
 
@@ -28,6 +25,7 @@ protected:
 
 private:
 	QRectF boardRect() const; // groesstes zentriertes Quadrat im Widget
-	board m_board;
+
+	bb::u64 m_black = 0, m_white = 0, m_markers = 0;
 	int m_hint = -1;
 };

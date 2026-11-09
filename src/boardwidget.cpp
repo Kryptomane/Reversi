@@ -3,67 +3,59 @@
 #include <QMouseEvent>
 #include <algorithm>
 
-void drawBoard(QPainter& p, const QRectF& r, const board& m, int hint)
+namespace
 {
-	p.save();
-	p.setRenderHint(QPainter::Antialiasing, true);
-	p.fillRect(r, QColor(0, 150, 0));
-	const double cell = r.width() / BSIZE;
+	const QColor BOARD_GREEN(0, 150, 0);
+	const QColor GRID_GREEN(0, 85, 0);
+	const QColor FRAME_GREEN(0, 60, 0);
+	const QColor HINT_YELLOW(255, 215, 0);
 
-	// duenne gestrichelte Linien zwischen den Feldern (horizontal und vertikal)
-	QPen grid(QColor(0, 85, 0));
-	grid.setStyle(Qt::DashLine);
-	grid.setWidthF(std::max(1.0, cell / 45.0));
-	p.setPen(grid);
-	for (int k = 1; k < BSIZE; k++)
+	QPointF cellCenter(const QRectF& r, double cell, int square)
 	{
-		const double x = r.left() + k * cell;
-		const double y = r.top() + k * cell;
-		p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
-		p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y));
+		return QPointF(r.left() + (square / bb::SIZE + 0.5) * cell, r.top() + (square % bb::SIZE + 0.5) * cell);
 	}
 
-	// Steine und Zugmarker
-	const QPen stoneEdge(QColor(40, 40, 40), std::max(1.0, cell / 50.0));
-	for (int i = 0; i < BSIZE; i++)
+	void drawGrid(QPainter& p, const QRectF& r, double cell)
 	{
-		for (int j = 0; j < BSIZE; j++)
+		QPen pen(GRID_GREEN);
+		pen.setStyle(Qt::DashLine);
+		pen.setWidthF(std::max(1.0, cell / 45.0));
+		p.setPen(pen);
+		for (int k = 1; k < bb::SIZE; k++)
 		{
-			const QPointF c(r.left() + (i + 0.5) * cell, r.top() + (j + 0.5) * cell);
-			const unsigned char v = m[i][j];
-			if (v == 1 || v == 2)
-			{
-				p.setPen(stoneEdge);
-				p.setBrush(v == 1 ? QColor(20, 20, 20) : QColor(245, 245, 245));
-				p.drawEllipse(c, 0.40 * cell, 0.40 * cell);
-			}
-			else if (v == 3 || v == 4)
-			{
-				p.setPen(Qt::NoPen);
-				p.setBrush(QColor(0, 0, 0, 90));
-				p.drawEllipse(c, 0.11 * cell, 0.11 * cell);
-			}
+			const double x = r.left() + k * cell, y = r.top() + k * cell;
+			p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
+			p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y));
 		}
 	}
 
-	// empfohlener Zug: gelber Rahmen
-	if (hint >= 0 && hint < BSIZE * BSIZE)
+	void drawStones(QPainter& p, const QRectF& r, double cell, bb::u64 stones, const QColor& fill)
 	{
-		const int hx = hint / BSIZE, hy = hint % BSIZE;
-		const double inset = 0.08 * cell;
-		const QRectF hr(r.left() + hx * cell + inset, r.top() + hy * cell + inset, cell - 2 * inset, cell - 2 * inset);
-		QPen hp(QColor(255, 215, 0));
-		hp.setWidthF(std::max(2.0, 0.07 * cell));
-		p.setPen(hp);
-		p.setBrush(Qt::NoBrush);
-		p.drawRoundedRect(hr, 0.12 * cell, 0.12 * cell);
+		p.setPen(QPen(QColor(40, 40, 40), std::max(1.0, cell / 50.0)));
+		p.setBrush(fill);
+		for (; stones; stones &= stones - 1)
+			p.drawEllipse(cellCenter(r, cell, bb::lsb(stones)), 0.40 * cell, 0.40 * cell);
 	}
 
-	// Rahmen ums Brett
-	p.setPen(QPen(QColor(0, 60, 0), std::max(1.0, cell / 30.0)));
-	p.setBrush(Qt::NoBrush);
-	p.drawRect(r);
-	p.restore();
+	void drawMarkers(QPainter& p, const QRectF& r, double cell, bb::u64 markers)
+	{
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0, 0, 0, 90));
+		for (; markers; markers &= markers - 1)
+			p.drawEllipse(cellCenter(r, cell, bb::lsb(markers)), 0.11 * cell, 0.11 * cell);
+	}
+
+	void drawHint(QPainter& p, const QRectF& r, double cell, int square)
+	{
+		const double inset = 0.08 * cell;
+		const QPointF c = cellCenter(r, cell, square);
+		const QRectF box(c.x() - cell / 2 + inset, c.y() - cell / 2 + inset, cell - 2 * inset, cell - 2 * inset);
+		QPen pen(HINT_YELLOW);
+		pen.setWidthF(std::max(2.0, 0.07 * cell));
+		p.setPen(pen);
+		p.setBrush(Qt::NoBrush);
+		p.drawRoundedRect(box, 0.12 * cell, 0.12 * cell);
+	}
 }
 
 BoardWidget::BoardWidget(QWidget* parent) : QWidget(parent)
@@ -71,9 +63,11 @@ BoardWidget::BoardWidget(QWidget* parent) : QWidget(parent)
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
-void BoardWidget::setBoard(const board& m, int hint)
+void BoardWidget::setPosition(bb::u64 black, bb::u64 white, bb::u64 markers, int hint)
 {
-	m_board = m;
+	m_black = black;
+	m_white = white;
+	m_markers = markers;
 	m_hint = hint;
 	update();
 }
@@ -87,16 +81,30 @@ QRectF BoardWidget::boardRect() const
 void BoardWidget::paintEvent(QPaintEvent*)
 {
 	QPainter p(this);
-	drawBoard(p, boardRect(), m_board, m_hint);
+	p.setRenderHint(QPainter::Antialiasing, true);
+	const QRectF r = boardRect();
+	const double cell = r.width() / bb::SIZE;
+
+	p.fillRect(r, BOARD_GREEN);
+	drawGrid(p, r, cell);
+	drawStones(p, r, cell, m_black, QColor(20, 20, 20));
+	drawStones(p, r, cell, m_white, QColor(245, 245, 245));
+	drawMarkers(p, r, cell, m_markers);
+	if (m_hint >= 0)
+		drawHint(p, r, cell, m_hint);
+
+	p.setPen(QPen(FRAME_GREEN, std::max(1.0, cell / 30.0)));
+	p.setBrush(Qt::NoBrush);
+	p.drawRect(r);
 }
 
 void BoardWidget::mousePressEvent(QMouseEvent* e)
 {
-	const QRectF br = boardRect();
+	const QRectF r = boardRect();
 	const QPointF pos = e->position();
-	if (!br.contains(pos))
+	if (!r.contains(pos))
 		return;
-	const int x = std::clamp((int)((pos.x() - br.left()) / br.width() * BSIZE), 0, BSIZE - 1);
-	const int y = std::clamp((int)((pos.y() - br.top()) / br.height() * BSIZE), 0, BSIZE - 1);
+	const int x = std::clamp((int)((pos.x() - r.left()) / r.width() * bb::SIZE), 0, bb::SIZE - 1);
+	const int y = std::clamp((int)((pos.y() - r.top()) / r.height() * bb::SIZE), 0, bb::SIZE - 1);
 	emit fieldClicked(x, y);
 }
