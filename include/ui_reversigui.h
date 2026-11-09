@@ -21,6 +21,7 @@ public:
 	QLabel* titleLabel;
 	QLabel* BlackChipsLabel;
 	QLabel* WhiteChipsLabel;
+	QPushButton* swapButton;
 	QLabel* evalLabel;
 	QLabel* modeLabel;
 	QComboBox* modeBox;
@@ -54,6 +55,8 @@ public:
 			"QPushButton#undoButton { background: #1565c0; }"
 			"QPushButton#undoButton:pressed { background: #0d47a1; }"
 			"QPushButton#undoButton:disabled { background: #9e9e9e; }"
+			"QPushButton#swapButton { background: #1565c0; padding: 4px 10px; }"
+			"QPushButton#swapButton:pressed { background: #0d47a1; }"
 			"QPushButton#exitGameButton { background: #757575; }"
 			"QPushButton#exitGameButton:pressed { background: #505050; }"
 			"QLabel#BlackChipsLabel, QLabel#WhiteChipsLabel { border-radius: 8px; padding: 4px 10px; }"));
@@ -90,8 +93,12 @@ public:
 			l->setAlignment(Qt::AlignCenter);
 			l->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 		}
-		scoreRow->addWidget(BlackChipsLabel);
-		scoreRow->addWidget(WhiteChipsLabel);
+		swapButton = new QPushButton(QStringLiteral("Farbe\ntauschen"), w); // zweizeilig: passt neben den Steinstand
+		swapButton->setObjectName(QStringLiteral("swapButton"));
+		swapButton->setMinimumHeight((int)(lh * 1.8));
+		scoreRow->addWidget(BlackChipsLabel, 1);
+		scoreRow->addWidget(WhiteChipsLabel, 1);
+		scoreRow->addWidget(swapButton);
 		mainLayout->addLayout(scoreRow);
 
 		// Bewertung der Stellung ("Gewinnchance: Schwarz > Weiss"), Zeichen waechst mit dem Vorteil

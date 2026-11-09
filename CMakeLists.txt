@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(reversi VERSION 1.0.6 LANGUAGES CXX)
+project(reversi VERSION 1.0.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,9 +19,11 @@ qt_add_executable(reversi WIN32
     src/main.cpp
     src/reversigui.cpp
     src/boardwidget.cpp
+    src/messageoverlay.cpp
     ${ENGINE_SOURCES}
     include/bitboard.h
     include/boardwidget.h
+    include/messageoverlay.h
     include/engine.h
     include/evaluation.h
     include/game.h

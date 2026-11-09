@@ -11,6 +11,7 @@
 
 namespace Ui { class ReversiGui; }
 class QCloseEvent;
+class MessageOverlay;
 
 class ReversiGui : public QWidget
 {
@@ -28,13 +29,16 @@ private:
 	enum class Mode { VsComputer, TwoPlayers };
 	enum class SearchKind { ComputerMove, Hint };
 
-	static constexpr Color COMPUTER = Color::White;
 	static constexpr int HINT_DELAY_MS = 1000;
 	static constexpr int EVAL_EQUAL_BAND = 80;  // |Bewertung| darunter gilt als ausgeglichen ("=")
 	static constexpr int EVAL_FULL_SCALE = 1500; // ab hier ist das Vergleichszeichen maximal gross (~4 Ecken)
 
 	// Ablauf
+	void requestNewGame();                     // laeuft eine Partie, erst nachfragen
 	void startNewGame();
+	void requestColorSwap();                   // Mensch uebernimmt die andere Farbe (nach Rueckfrage)
+	void swapColors();
+	void showGameOver();                       // vollflaechige Meldung: Glueckwunsch / Weiter ueben
 	void onFieldClicked(int x, int y);
 	void handleTurn(Game::Turn turn);          // nach jedem Zug: Anzeige, Status, ggf. PC/Tipp starten
 	void undoMove();                           // gegen den PC: letzten PC-Zug und eigenen Zug zuruecknehmen
@@ -74,11 +78,13 @@ private:
 	// Beenden
 	void confirmQuit();
 	void quit();
+	bool gameInProgress() const { return game.canUndo() && !game.isOver(); }
 
-	bool isComputer(Color c) const { return mode == Mode::VsComputer && c == COMPUTER; }
+	bool isComputer(Color c) const { return mode == Mode::VsComputer && c == computerColor; }
 	bool humanToMove() const { return !game.isOver() && !computerThinking && !isComputer(game.toMove()); }
 
 	Ui::ReversiGui* ui;
+	MessageOverlay* overlay;
 	Game game;
 	engine::Engine ai;
 	std::thread searchThread;
@@ -86,6 +92,7 @@ private:
 	std::thread analysisThread;
 	int shownEvalDepth = -1;       // Tiefe der angezeigten Bewertung (tiefere ersetzen flachere)
 	Mode mode = Mode::VsComputer;
+	Color computerColor = Color::White;
 
 	int positionId = 0;            // steigt bei jeder neuen Stellung -> veraltete Ergebnisse verwerfen
 	bool computerThinking = false;
@@ -98,6 +105,5 @@ private:
 	bb::u64 framedFlips = 0;       // oranger Rahmen: dabei umgedrehte Steine
 	bool animateNextUpdate = false;
 	QString passInfo;              // z. B. "Weiss muss passen. "
-	bool quitDialogOpen = false;
 	bool quitConfirmed = false;
 };

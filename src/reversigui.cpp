@@ -1,9 +1,9 @@
 #include "reversigui.h"
 #include "ui_reversigui.h"
+#include "messageoverlay.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QKeyEvent>
-#include <QMessageBox>
 #include <QSettings>
 #include <QTimer>
 #include <QDebug>
@@ -12,6 +12,8 @@
 ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui)
 {
 	ui->setupUi(this);
+	overlay = new MessageOverlay(this);
+	computerColor = QSettings().value("computerColor", 1).toInt() == 0 ? Color::Black : Color::White;
 #ifndef Q_OS_ANDROID
 	resize(460, 860); // Desktop: Hochformat wie am Handy, frei skalierbar
 #endif
@@ -22,9 +24,10 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 	updateHintLabel(nullptr);
 
 	connect(ui->board, &BoardWidget::fieldClicked, this, &ReversiGui::onFieldClicked);
-	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::startNewGame);
+	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::requestNewGame);
 	connect(ui->undoButton, &QPushButton::clicked, this, &ReversiGui::undoMove);
-	connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::quit);
+	connect(ui->swapButton, &QPushButton::clicked, this, &ReversiGui::requestColorSwap);
+	connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::confirmQuit);
 	connect(ui->hintBox, &QCheckBox::toggled, this, &ReversiGui::onHintToggled);
 	connect(ui->animateBox, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("animate", on); });
 	qApp->installEventFilter(this);
@@ -40,6 +43,60 @@ ReversiGui::~ReversiGui()
 }
 
 // ======================= Ablauf =======================
+
+void ReversiGui::requestNewGame()
+{
+	if (!gameInProgress())
+	{
+		startNewGame();
+		return;
+	}
+	overlay->show({ QStringLiteral("Neues Spiel starten?"), QStringLiteral("Die laufende Partie geht verloren."),
+	                QStringLiteral("Neues Spiel") }, [this]() { startNewGame(); });
+}
+
+void ReversiGui::requestColorSwap()
+{
+	const Color human = opponent(computerColor);
+	overlay->show({ QStringLiteral("Farben tauschen?"),
+	                QStringLiteral("Du spielst dann ") + colorName(computerColor) + QStringLiteral(", der PC ") + colorName(human) + ".",
+	                QStringLiteral("Tauschen") }, [this]() { swapColors(); });
+}
+
+// Die Partie laeuft weiter; der PC uebernimmt die bisherige Farbe des Menschen.
+void ReversiGui::swapColors()
+{
+	stopSearch();
+	computerColor = opponent(computerColor);
+	QSettings().setValue("computerColor", computerColor == Color::Black ? 0 : 1);
+	framedMove = -1;
+	framedFlips = 0;
+	if (!game.isOver())
+		handleTurn(Game::Turn::Next);
+	else
+		updateView();
+}
+
+// Erst nach der Animation des letzten Zugs zeigen, damit man ihn noch sieht.
+void ReversiGui::showGameOver()
+{
+	const int wait = ui->board->animationRemainingMs();
+	QTimer::singleShot(wait + 400, this, [this, forPosition = positionId]() {
+		if (forPosition != positionId || !game.isOver())
+			return;
+		const int b = game.count(Color::Black), w = game.count(Color::White);
+		const QString score = QStringLiteral("Schwarz ") + QString::number(b) + " : " + QString::number(w) + QStringLiteral(" Wei\u00DF");
+		QString title;
+		if (b == w)
+			title = QStringLiteral("Unentschieden!");
+		else if (mode == Mode::TwoPlayers)
+			title = colorName(b > w ? Color::Black : Color::White) + QStringLiteral(" gewinnt!");
+		else
+			title = isComputer(b > w ? Color::Black : Color::White) ? QStringLiteral("Weiter \u00FCben ;)") : QStringLiteral("Gl\u00FCckwunsch!");
+		overlay->show({ title, score, QStringLiteral("Neues Spiel"), QStringLiteral("Zur\u00FCck zum Spiel"), true },
+		              [this]() { startNewGame(); });
+	});
+}
 
 void ReversiGui::startNewGame()
 {
@@ -89,6 +146,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 		stopAnalysis();
 		showFinalEvaluation();
 		showStatus(gameOverText());
+		showGameOver();
 		return;
 	}
 	startAnalysis();
@@ -377,6 +435,7 @@ void ReversiGui::updateView()
 	ui->BlackChipsLabel->setStyleSheet(scoreStyle(Color::Black));
 	ui->WhiteChipsLabel->setStyleSheet(scoreStyle(Color::White));
 	ui->undoButton->setEnabled(game.canUndo());
+	ui->swapButton->setVisible(mode == Mode::VsComputer);
 }
 
 // Beschriftung des Tipp-Schalters: zeigt, wie tief der Vorschlag schon gerechnet ist.
@@ -426,8 +485,16 @@ bool ReversiGui::eventFilter(QObject* object, QEvent* e)
 		const QKeyEvent* key = static_cast<QKeyEvent*>(e);
 		if (key->key() == Qt::Key_Back) // sonst schliesst Android die App sofort
 		{
-			if (e->type() == QEvent::KeyRelease && !key->isAutoRepeat())
-				QTimer::singleShot(0, this, &ReversiGui::confirmQuit); // Dialog nicht im Filter oeffnen
+			// Schon beim Druecken reagieren: bei der Gesten-Navigation (Android 13+) kommt das
+			// Loslassen nicht immer an. Ist die Rueckfrage offen, wirkt Zurueck wie "Abbrechen".
+			if (e->type() == QEvent::KeyPress && !key->isAutoRepeat())
+			{
+				qDebug() << "Zurueck-Taste";
+				if (overlay->isOpen())
+					overlay->cancel();
+				else
+					QTimer::singleShot(0, this, &ReversiGui::confirmQuit);
+			}
 			return true;
 		}
 	}
@@ -436,6 +503,7 @@ bool ReversiGui::eventFilter(QObject* object, QEvent* e)
 
 void ReversiGui::closeEvent(QCloseEvent* e)
 {
+	qDebug() << "closeEvent, bestaetigt:" << quitConfirmed;
 #ifdef Q_OS_ANDROID
 	if (!quitConfirmed) // falls Android das Fenster trotzdem schliessen will: erst nachfragen
 	{
@@ -449,14 +517,8 @@ void ReversiGui::closeEvent(QCloseEvent* e)
 
 void ReversiGui::confirmQuit()
 {
-	if (quitDialogOpen)
-		return;
-	quitDialogOpen = true;
-	const auto answer = QMessageBox::question(this, QStringLiteral("Reversi"), QStringLiteral("Spiel wirklich beenden?"),
-	                                          QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-	quitDialogOpen = false;
-	if (answer == QMessageBox::Yes)
-		quit();
+	if (!overlay->isOpen())
+		overlay->show({ QStringLiteral("Spiel wirklich beenden?"), QString(), QStringLiteral("Beenden") }, [this]() { quit(); });
 }
 
 void ReversiGui::quit()
