@@ -356,6 +356,7 @@ namespace engine
 			res.depth = depth;
 			res.exact = depth >= empties;
 			res.wld = !res.exact && isProvenResult(best);
+			reportProgress(res);
 			if (res.exact || res.wld) return; // tiefer rechnen aendert nichts mehr
 		}
 	}
@@ -377,6 +378,7 @@ namespace engine
 			res.score = wld;
 			res.depth = empties;
 			res.wld = true;
+			reportProgress(res);
 		}
 		const int exact = searchRoot(P, O, rm, empties, -INF, INF, bestIdx, true);
 		if (!abort)
@@ -386,6 +388,7 @@ namespace engine
 			res.depth = empties;
 			res.exact = true;
 			res.wld = false;
+			reportProgress(res);
 		}
 		else if (wld <= -1) // verloren, aber knappste Niederlage nicht gefunden: Mittelspielzug behalten
 		{
@@ -420,6 +423,7 @@ namespace engine
 		nodes = 0;
 		abort = false;
 		nThreads = s.threads > 0 ? s.threads : std::max(1, (int)std::thread::hardware_concurrency());
+		progress = &s.onProgress;
 		Result res;
 		auto finish = [&]() {
 			res.stopped = stopRequested;
@@ -459,22 +463,24 @@ namespace engine
 
 	namespace
 	{
-		struct Level { int depth; int noise; int endgame; }; // Namen der Stufen stehen in der GUI
+		struct Level { int depth; int noise; int endgame; int maxSeconds; }; // Namen stehen in der GUI
 
-		// Rauschen in Bewertungseinheiten (Ecke = 400, ein Zug Mobilitaet = 30).
-		// Kalibriert per Testpartien: jede Stufe gewinnt etwa 80-90 % gegen die darunter.
+		// Rauschen (nur Stufen 1-4) in Bewertungseinheiten: Ecke = 400, ein Zug Mobilitaet = 30.
+		// Stufen 10-12 entsprechen der frueheren Zeitsteuerung mit ca. 3 s / 5 s / 10 s Bedenkzeit.
 		constexpr Level LEVEL_TABLE[LEVELS] = {
-			//  Tiefe Rauschen Endspiel
-			{  1, 2000,  0 },  //  1 Anfaenger
-			{  1,  700,  0 },  //  2 Leicht
-			{  1,  150,  0 },  //  3 Leicht+
-			{  2,  220,  0 },  //  4 Mittel
-			{  3,  160,  6 },  //  5 Mittel+
-			{  4,   70,  8 },  //  6 Fortgeschritten
-			{  5,   15, 10 },  //  7 Stark
-			{  7,    0, 12 },  //  8 Sehr stark
-			{  9,    0, 16 },  //  9 Experte
-			{ 12,    0, 18 },  // 10 Meister
+			//  Tiefe Rauschen Endspiel Notbremse(s)
+			{  1, 400,  0, 10 },  //  1 Anfaenger
+			{  2, 250,  0, 10 },  //  2 Leicht
+			{  3, 150,  4, 10 },  //  3 Leicht+
+			{  4,  80,  6, 10 },  //  4 Mittel
+			{  5,   0,  8, 10 },  //  5 Mittel+
+			{  6,   0, 10, 10 },  //  6 Fortgeschritten
+			{  8,   0, 12, 10 },  //  7 Stark
+			{ 10,   0, 14, 10 },  //  8 Sehr stark
+			{ 12,   0, 16, 15 },  //  9 Experte
+			{ 15,   0, 20, 20 },  // 10 Meister      (~3 s alt)
+			{ 16,   0, 21, 25 },  // 11 Grossmeister (~5 s alt)
+			{ 17,   0, 22, 40 },  // 12 Weltklasse   (~10 s alt)
 		};
 
 		const Level& levelData(int level) { return LEVEL_TABLE[std::clamp(level, 1, LEVELS) - 1]; }
@@ -487,17 +493,16 @@ namespace engine
 		s.maxDepth = l.depth;
 		s.noise = l.noise;
 		s.endgameEmpties = l.endgame;
-		s.timeMs = 10000; // nur Notbremse auf sehr langsamen Geraeten
+		s.timeMs = l.maxSeconds * 1000;
 		return s;
 	}
 
-	Settings hintSettings(int level)
+	Settings hintSettings()
 	{
-		const Level& l = levelData(level);
 		Settings s;
-		s.maxDepth = std::min(16, std::max(8, 2 * l.depth + 2)); // mind. doppelte Tiefe, nie unter 8
-		s.endgameEmpties = std::min(20, std::max(16, l.endgame + 4));
-		s.timeMs = 3000;                                          // Tipp soll schnell da sein
+		s.maxDepth = 60;       // keine feste Tiefe: so tief wie die Zeit erlaubt
+		s.endgameEmpties = 22; // perfektes Endspiel frueher als jede Stufe
+		s.timeMs = 30000;      // laeuft, solange der Spieler nachdenkt (spaetestens 30 s)
 		return s;
 	}
 }

@@ -12,10 +12,12 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 {
 	ui->setupUi(this);
 #ifndef Q_OS_ANDROID
-	resize(460, 820); // Desktop: Hochformat wie am Handy, frei skalierbar
+	resize(460, 860); // Desktop: Hochformat wie am Handy, frei skalierbar
 #endif
+	setupModeBox();
 	setupLevelBox();
 	ui->hintBox->setChecked(QSettings().value("hint", false).toBool());
+	updateHintLabel(nullptr);
 
 	connect(ui->board, &BoardWidget::fieldClicked, this, &ReversiGui::onFieldClicked);
 	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::startNewGame);
@@ -57,6 +59,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 {
 	positionId++;
 	hintSquare = -1;
+	updateHintLabel(nullptr);
 	updateView();
 
 	if (game.isOver())
@@ -64,7 +67,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 		showStatus(gameOverText());
 		return;
 	}
-	const QString passInfo = turn == Game::Turn::OpponentPasses
+	passInfo = turn == Game::Turn::OpponentPasses
 		? colorName(opponent(game.toMove())) + QStringLiteral(" muss passen. ") : QString();
 
 	if (isComputer(game.toMove()))
@@ -74,7 +77,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 	}
 	else
 	{
-		showStatus(passInfo + QStringLiteral("Du bist dran (") + colorName(game.toMove()) + ")." + lastResultInfo);
+		showStatus(passInfo + yourTurnText() + lastResultInfo);
 		if (ui->hintBox->isChecked())
 			startSearch(SearchKind::Hint);
 	}
@@ -85,19 +88,33 @@ void ReversiGui::handleTurn(Game::Turn turn)
 void ReversiGui::startSearch(SearchKind kind)
 {
 	stopSearch(); // hoechstens eine Suche gleichzeitig
-	const bool hint = kind == SearchKind::Hint;
-	hintRunning = hint;
-	computerThinking = !hint;
+	hintRunning = kind == SearchKind::Hint;
+	computerThinking = !hintRunning;
 
-	const engine::Settings s = hint ? engine::hintSettings(level()) : engine::levelSettings(level());
-	const bb::u64 P = game.own(), O = game.opponentDiscs(); // Kopie: der Thread fasst die GUI-Daten nicht an
+	engine::Settings s = hintRunning ? engine::hintSettings() : engine::levelSettings(level());
 	const int forPosition = positionId;
+	s.onProgress = [this, forPosition, kind](const engine::Result& r) { // laeuft im Such-Thread
+		QMetaObject::invokeMethod(this, [this, r, forPosition, kind]() { onSearchProgress(r, forPosition, kind); },
+		                          Qt::QueuedConnection);
+	};
+	const bb::u64 P = game.own(), O = game.opponentDiscs(); // Kopie: der Thread fasst die GUI-Daten nicht an
 	ai.resetStop();
 	searchThread = std::thread([this, P, O, s, forPosition, kind]() {
 		const engine::Result r = ai.search(P, O, s);
 		QMetaObject::invokeMethod(this, [this, r, forPosition, kind]() { onSearchResult(r, forPosition, kind); },
 		                          Qt::QueuedConnection);
 	});
+}
+
+// Zwischenstand: Tipp sofort aktualisieren, beim PC die erreichte Tiefe anzeigen.
+void ReversiGui::onSearchProgress(const engine::Result& r, int forPosition, SearchKind kind)
+{
+	if (forPosition != positionId || r.move < 0)
+		return;
+	if (kind == SearchKind::Hint)
+		showHint(r);
+	else if (computerThinking)
+		showStatus(passInfo + QStringLiteral("PC denkt ... Tiefe ") + QString::number(r.depth));
 }
 
 void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, SearchKind kind)
@@ -108,11 +125,8 @@ void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, Search
 	if (kind == SearchKind::Hint)
 	{
 		hintRunning = false;
-		if (ui->hintBox->isChecked() && humanToMove() && !r.stopped)
-		{
-			hintSquare = r.move;
-			updateView();
-		}
+		if (!r.stopped)
+			showHint(r);
 		return;
 	}
 
@@ -121,6 +135,15 @@ void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, Search
 	         << (r.exact ? "exakt" : r.wld ? "WLD" : "") << "Knoten" << r.nodes << "Zeit" << r.seconds;
 	lastResultInfo = provenResultText(r);
 	handleTurn(game.play(r.move));
+}
+
+void ReversiGui::showHint(const engine::Result& r)
+{
+	if (!ui->hintBox->isChecked() || !humanToMove())
+		return;
+	hintSquare = r.move;
+	updateHintLabel(&r);
+	updateView();
 }
 
 void ReversiGui::stopSearch()
@@ -134,17 +157,42 @@ void ReversiGui::stopSearch()
 
 // ======================= Einstellungen =======================
 
+void ReversiGui::setupModeBox()
+{
+	ui->modeBox->addItem(QStringLiteral("Computer"), (int)Mode::VsComputer);
+	ui->modeBox->addItem(QStringLiteral("Mensch (2 Spieler)"), (int)Mode::TwoPlayers);
+	mode = QSettings().value("mode", 0).toInt() == (int)Mode::TwoPlayers ? Mode::TwoPlayers : Mode::VsComputer;
+	ui->modeBox->setCurrentIndex(ui->modeBox->findData((int)mode));
+	ui->levelBox->setEnabled(mode == Mode::VsComputer);
+	connect(ui->modeBox, &QComboBox::currentIndexChanged, this, &ReversiGui::onModeChanged);
+}
+
 void ReversiGui::setupLevelBox()
 {
 	static const char16_t* const names[engine::LEVELS] = {
-		u"1 \u2013 Anf\u00E4nger", u"2 \u2013 Leicht", u"3 \u2013 Leicht+", u"4 \u2013 Mittel", u"5 \u2013 Mittel+",
-		u"6 \u2013 Fortgeschritten", u"7 \u2013 Stark", u"8 \u2013 Sehr stark", u"9 \u2013 Experte", u"10 \u2013 Meister" };
+		u"Anf\u00E4nger", u"Leicht", u"Leicht+", u"Mittel", u"Mittel+", u"Fortgeschritten",
+		u"Stark", u"Sehr stark", u"Experte", u"Meister", u"Gro\u00DFmeister", u"Weltklasse" };
 	for (int l = 1; l <= engine::LEVELS; l++)
-		ui->levelBox->addItem(QString::fromUtf16(names[l - 1]), l);
-	ui->levelBox->setCurrentIndex(std::clamp(QSettings().value("level", 3).toInt(), 1, engine::LEVELS) - 1);
+	{
+		const QString text = QString::number(l) + QStringLiteral(" \u2013 ") + QString::fromUtf16(names[l - 1])
+			+ QStringLiteral(" (Tiefe ") + QString::number(engine::levelSettings(l).maxDepth) + ")";
+		ui->levelBox->addItem(text, l);
+	}
+	ui->levelBox->setCurrentIndex(std::clamp(QSettings().value("level", 5).toInt(), 1, engine::LEVELS) - 1);
 	connect(ui->levelBox, &QComboBox::currentIndexChanged, this, [this]() {
 		QSettings().setValue("level", level()); // gilt ab dem naechsten PC-Zug
 	});
+}
+
+// Wechsel zwischen PC- und Zwei-Spieler-Modus: die laufende Partie geht einfach weiter.
+void ReversiGui::onModeChanged()
+{
+	mode = (Mode)ui->modeBox->currentData().toInt();
+	QSettings().setValue("mode", (int)mode);
+	ui->levelBox->setEnabled(mode == Mode::VsComputer);
+	stopSearch();
+	lastResultInfo.clear();
+	handleTurn(Game::Turn::Next);
 }
 
 int ReversiGui::level() const
@@ -162,6 +210,7 @@ void ReversiGui::onHintToggled(bool on)
 		if (hintRunning)
 			stopSearch(); // nur die Tipp-Suche abbrechen, nie die PC-Suche
 		hintSquare = -1;
+		updateHintLabel(nullptr);
 		updateView();
 	}
 }
@@ -181,6 +230,18 @@ void ReversiGui::updateView()
 	ui->WhiteChipsLabel->setStyleSheet(running && game.toMove() == Color::White ? active : inactive);
 }
 
+// Beschriftung des Tipp-Schalters: zeigt, wie tief der Vorschlag schon gerechnet ist.
+void ReversiGui::updateHintLabel(const engine::Result* r)
+{
+	QString text = QStringLiteral("Besten Zug zeigen");
+	if (r && (r->exact || r->wld))
+		text += r->score > 0 ? QStringLiteral(" (Sieg sicher)")
+		      : r->score < 0 ? QStringLiteral(" (beste Verteidigung)") : QStringLiteral(" (Remis sicher)");
+	else if (r)
+		text += QStringLiteral(" (Tiefe ") + QString::number(r->depth) + ")";
+	ui->hintBox->setText(text);
+}
+
 void ReversiGui::showStatus(const QString& text)
 {
 	ui->MessageLabel->setText(text);
@@ -189,6 +250,13 @@ void ReversiGui::showStatus(const QString& text)
 QString ReversiGui::colorName(Color c)
 {
 	return c == Color::Black ? QStringLiteral("Schwarz") : QStringLiteral("Wei\u00DF");
+}
+
+QString ReversiGui::yourTurnText() const
+{
+	if (mode == Mode::TwoPlayers)
+		return colorName(game.toMove()) + QStringLiteral(" ist dran.");
+	return QStringLiteral("Du bist dran (") + colorName(game.toMove()) + ").";
 }
 
 QString ReversiGui::gameOverText() const

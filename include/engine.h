@@ -6,6 +6,7 @@
 #include "transpositiontable.h"
 #include <atomic>
 #include <chrono>
+#include <functional>
 
 namespace engine
 {
@@ -16,6 +17,8 @@ namespace engine
 
 	inline bool isProvenResult(int score) { return score >= WIN - 64 || score <= -WIN + 64; }
 
+	struct Result;
+
 	struct Settings
 	{
 		int timeMs = 2000;       // Obergrenze fuer die Bedenkzeit
@@ -23,13 +26,17 @@ namespace engine
 		int endgameEmpties = 20; // ab so wenigen freien Feldern bis zum Spielende rechnen
 		int threads = 0;         // 0 = alle Kerne
 		int noise = 0;           // >0: Zufallsrauschen +-noise auf die Zugbewertung (schwache Stufen)
+		std::function<void(const Result&)> onProgress; // optional: nach jeder fertigen Iteration (Such-Thread!)
 	};
 
-	// Spielstaerke-Stufen 1 (Anfaenger) .. LEVELS (Meister). Die Staerke haengt an der Suchtiefe,
-	// nicht an der Zeit -> auf jedem Geraet gleich stark.
-	constexpr int LEVELS = 10;
+	// Spielstaerke-Stufen 1 (Anfaenger) .. LEVELS. Die Staerke haengt an der Suchtiefe, nicht an der
+	// Zeit -> auf jedem Geraet gleich stark. Die Zeitgrenze ist nur eine Notbremse.
+	constexpr int LEVELS = 12;
 	Settings levelSettings(int level);
-	Settings hintSettings(int level);   // Zugvorschlag: deutlich staerker als der PC auf dieser Stufe
+
+	// Zugvorschlag: rechnet ohne feste Tiefe immer tiefer (bis zur Zeitgrenze) und meldet jede
+	// Verbesserung ueber onProgress -> nach kurzer Zeit deutlich staerker als jede Stufe.
+	Settings hintSettings();
 
 	struct Result
 	{
@@ -67,6 +74,7 @@ namespace engine
 		static RootMoves rootMoves(u64 P, u64 O);
 		void iterativeDeepening(u64 P, u64 O, RootMoves& rm, int maxDepth, int empties, Result& res);
 		void solveEndgame(u64 P, u64 O, RootMoves& rm, int empties, Result& res);
+		void reportProgress(const Result& res) const { if (progress && *progress) (*progress)(res); }
 		int pickWithNoise(u64 P, u64 O, const RootMoves& rm, int depth, int noise);
 
 		int searchRoot(u64 P, u64 O, const RootMoves& rm, int depth, int alpha, int beta, int& bestIdx, bool checkTime);
@@ -80,5 +88,6 @@ namespace engine
 		std::atomic<bool> stopRequested{ false };
 		std::atomic<long long> nodes{ 0 };
 		Clock::time_point deadline;
+		const std::function<void(const Result&)>* progress = nullptr;
 	};
 }

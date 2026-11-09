@@ -11,6 +11,7 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QBoxLayout>
+#include <algorithm>
 #include "boardwidget.h"
 
 class Ui_ReversiGui
@@ -20,6 +21,8 @@ public:
 	QLabel* titleLabel;
 	QLabel* BlackChipsLabel;
 	QLabel* WhiteChipsLabel;
+	QLabel* modeLabel;
+	QComboBox* modeBox;
 	QLabel* levelLabel;
 	QComboBox* levelBox;
 	QCheckBox* hintBox;
@@ -30,7 +33,7 @@ public:
 	void setupUi(QWidget* w)
 	{
 		w->setObjectName(QStringLiteral("ReversiGui"));
-		const QString title = QStringLiteral("Reversi v" APP_VERSION " alpha \u00A9 Silas Maile"); // APP_VERSION kommt aus CMake
+		const QString title = QStringLiteral("Reversi v" APP_VERSION " beta \u00A9 Silas Maile"); // APP_VERSION kommt aus CMake
 		w->setWindowTitle(title);
 
 		// Grundschrift etwas groesser als Standard, daraus alle Hoehen ableiten
@@ -84,7 +87,16 @@ public:
 		scoreRow->addWidget(WhiteChipsLabel);
 		mainLayout->addLayout(scoreRow);
 
-		// Spielstaerke
+		// Gegner (Computer oder zweiter Mensch) und Spielstaerke; Beschriftungen gleich breit
+		QHBoxLayout* modeRow = new QHBoxLayout();
+		modeLabel = new QLabel(QStringLiteral("Gegner:"), w);
+		modeBox = new QComboBox(w);
+		modeBox->setMinimumHeight((int)(lh * 2.2));
+		modeBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+		modeRow->addWidget(modeLabel);
+		modeRow->addWidget(modeBox, 1);
+		mainLayout->addLayout(modeRow);
+
 		QHBoxLayout* levelRow = new QHBoxLayout();
 		levelLabel = new QLabel(QStringLiteral("Spielst\u00E4rke:"), w);
 		levelBox = new QComboBox(w);
@@ -93,6 +105,9 @@ public:
 		levelRow->addWidget(levelLabel);
 		levelRow->addWidget(levelBox, 1);
 		mainLayout->addLayout(levelRow);
+		const int labelWidth = std::max(modeLabel->sizeHint().width(), levelLabel->sizeHint().width());
+		modeLabel->setMinimumWidth(labelWidth);
+		levelLabel->setMinimumWidth(labelWidth);
 
 		hintBox = new QCheckBox(QStringLiteral("Besten Zug zeigen"), w);
 		hintBox->setMinimumHeight((int)(lh * 2.0));

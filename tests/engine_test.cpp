@@ -113,7 +113,7 @@ static void testLevelsAreOrdered()
 {
 	engine::Engine a(18), b(18);
 	bool ok = true;
-	for (int level = 1; level < 7; level++)
+	for (int level = 1; level < 8; level++)
 	{
 		engine::Settings stronger = engine::levelSettings(level + 1), weaker = engine::levelSettings(level);
 		stronger.threads = weaker.threads = 1;
@@ -121,7 +121,22 @@ static void testLevelsAreOrdered()
 		printf("    Stufe %d gegen Stufe %d: %.1f/20\n", level + 1, level, pts);
 		ok &= pts > 10;
 	}
-	check(ok, "Stufen: jede hoehere schlaegt die niedrigere (1..7)");
+	check(ok, "Stufen: jede hoehere schlaegt die niedrigere (1..8)");
+}
+
+// Der Tipp meldet Zwischenstaende mit wachsender Tiefe und laesst sich jederzeit stoppen.
+static void testProgressAndStop()
+{
+	engine::Engine e(20);
+	engine::Settings s = engine::hintSettings();
+	std::vector<int> depths;
+	s.onProgress = [&](const engine::Result& r) { depths.push_back(r.depth); if (r.depth >= 10) e.stop(); };
+	e.resetStop();
+	const engine::Result r = e.search(bb::START_BLACK, bb::START_WHITE, s);
+	bool increasing = depths.size() >= 10;
+	for (size_t i = 1; i < depths.size(); i++)
+		increasing &= depths[i] == depths[i - 1] + 1;
+	check(increasing && r.stopped && r.move >= 0 && r.seconds < 5, "Tipp: Zwischenstaende Tiefe 1,2,3,... und Abbruch per stop()");
 }
 
 static void testStrength()
@@ -143,6 +158,7 @@ int main()
 	testEndgameExact(1);
 	testEndgameExact(4);
 	testLevelsAreOrdered();
+	testProgressAndStop();
 	testStrength();
 	printf(failures ? "\n%d Test(s) fehlgeschlagen\n" : "\nAlle Tests gruen\n", failures);
 	return failures ? 1 : 0;
