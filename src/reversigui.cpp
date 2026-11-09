@@ -17,12 +17,14 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 	setupModeBox();
 	setupLevelBox();
 	ui->hintBox->setChecked(QSettings().value("hint", false).toBool());
+	ui->animateBox->setChecked(QSettings().value("animate", true).toBool());
 	updateHintLabel(nullptr);
 
 	connect(ui->board, &BoardWidget::fieldClicked, this, &ReversiGui::onFieldClicked);
 	connect(ui->newGameButton, &QPushButton::clicked, this, &ReversiGui::startNewGame);
 	connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::quit);
 	connect(ui->hintBox, &QCheckBox::toggled, this, &ReversiGui::onHintToggled);
+	connect(ui->animateBox, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("animate", on); });
 	qApp->installEventFilter(this);
 
 	startNewGame();
@@ -42,6 +44,7 @@ void ReversiGui::startNewGame()
 	game.reset();
 	ai.clear();
 	lastResultInfo.clear();
+	lastHumanMove = lastComputerMove = -1;
 	handleTurn(Game::Turn::Next);
 }
 
@@ -52,6 +55,10 @@ void ReversiGui::onFieldClicked(int x, int y)
 		return;
 	if (hintRunning)
 		stopSearch(); // Tipp wird nicht mehr gebraucht
+	lastHumanMove = square;
+	if (mode == Mode::TwoPlayers)
+		lastComputerMove = -1;
+	animateNextUpdate = true;
 	handleTurn(game.play(square));
 }
 
@@ -90,6 +97,15 @@ void ReversiGui::startSearch(SearchKind kind)
 	stopSearch(); // hoechstens eine Suche gleichzeitig
 	hintRunning = kind == SearchKind::Hint;
 	computerThinking = !hintRunning;
+	if (hintRunning)
+	{
+		hintPending = false;
+		hintClock.start();
+		QTimer::singleShot(HINT_DELAY_MS, this, [this, forPosition = positionId]() {
+			if (forPosition == positionId && hintPending)
+				showHint(pendingHint);
+		});
+	}
 
 	engine::Settings s = hintRunning ? engine::hintSettings() : engine::levelSettings(level());
 	const int forPosition = positionId;
@@ -112,7 +128,7 @@ void ReversiGui::onSearchProgress(const engine::Result& r, int forPosition, Sear
 	if (forPosition != positionId || r.move < 0)
 		return;
 	if (kind == SearchKind::Hint)
-		showHint(r);
+		offerHint(r);
 	else if (computerThinking)
 		showStatus(passInfo + QStringLiteral("PC denkt ... Tiefe ") + QString::number(r.depth));
 }
@@ -126,19 +142,44 @@ void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, Search
 	{
 		hintRunning = false;
 		if (!r.stopped)
-			showHint(r);
+			offerHint(r);
 		return;
 	}
 
+	// Laeuft noch die Animation des menschlichen Zugs, den PC-Zug erst danach zeigen.
+	if (const int wait = ui->board->animationRemainingMs(); wait > 0)
+	{
+		QTimer::singleShot(wait + 30, this, [this, r, forPosition, kind]() { onSearchResult(r, forPosition, kind); });
+		return;
+	}
+	applyComputerMove(r);
+}
+
+void ReversiGui::applyComputerMove(const engine::Result& r)
+{
 	computerThinking = false;
 	qDebug() << "PC-Zug" << r.move / 8 << r.move % 8 << "Tiefe" << r.depth << "Wert" << r.score
 	         << (r.exact ? "exakt" : r.wld ? "WLD" : "") << "Knoten" << r.nodes << "Zeit" << r.seconds;
 	lastResultInfo = provenResultText(r);
+	lastComputerMove = r.move;
+	animateNextUpdate = true;
 	handleTurn(game.play(r.move));
+}
+
+void ReversiGui::offerHint(const engine::Result& r)
+{
+	if (hintClock.elapsed() < HINT_DELAY_MS)
+	{
+		pendingHint = r; // der Timer aus startSearch zeigt ihn nach Ablauf der Sekunde
+		hintPending = true;
+		return;
+	}
+	showHint(r);
 }
 
 void ReversiGui::showHint(const engine::Result& r)
 {
+	hintPending = false;
 	if (!ui->hintBox->isChecked() || !humanToMove())
 		return;
 	hintSquare = r.move;
@@ -153,6 +194,7 @@ void ReversiGui::stopSearch()
 		searchThread.join();
 	computerThinking = false;
 	hintRunning = false;
+	hintPending = false;
 }
 
 // ======================= Einstellungen =======================
@@ -192,6 +234,7 @@ void ReversiGui::onModeChanged()
 	ui->levelBox->setEnabled(mode == Mode::VsComputer);
 	stopSearch();
 	lastResultInfo.clear();
+	lastComputerMove = -1;
 	handleTurn(Game::Turn::Next);
 }
 
@@ -219,8 +262,15 @@ void ReversiGui::onHintToggled(bool on)
 
 void ReversiGui::updateView()
 {
-	const bb::u64 markers = humanToMove() ? game.legalMoves() : 0;
-	ui->board->setPosition(game.discs(Color::Black), game.discs(Color::White), markers, hintSquare);
+	BoardState s;
+	s.black = game.discs(Color::Black);
+	s.white = game.discs(Color::White);
+	s.markers = humanToMove() ? game.legalMoves() : 0;
+	s.hint = hintSquare;
+	s.humanMove = lastHumanMove;
+	s.computerMove = lastComputerMove;
+	ui->board->setState(s, animateNextUpdate && ui->animateBox->isChecked());
+	animateNextUpdate = false;
 
 	ui->BlackChipsLabel->setText(QStringLiteral("\u25CF Schwarz  ") + QString::number(game.count(Color::Black)));
 	ui->WhiteChipsLabel->setText(QStringLiteral("\u25CB Wei\u00DF  ") + QString::number(game.count(Color::White)));

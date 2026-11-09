@@ -4,6 +4,7 @@
 // Zwischenstaende und Ergebnisse kommen per Qt-Ereignis zurueck.
 
 #include <QWidget>
+#include <QElapsedTimer>
 #include <thread>
 #include "engine.h"
 #include "game.h"
@@ -28,6 +29,7 @@ private:
 	enum class SearchKind { ComputerMove, Hint };
 
 	static constexpr Color COMPUTER = Color::White;
+	static constexpr int HINT_DELAY_MS = 1000;
 
 	// Ablauf
 	void startNewGame();
@@ -38,6 +40,8 @@ private:
 	void startSearch(SearchKind kind);
 	void onSearchProgress(const engine::Result& r, int forPosition, SearchKind kind);
 	void onSearchResult(const engine::Result& r, int forPosition, SearchKind kind);
+	void applyComputerMove(const engine::Result& r);
+	void offerHint(const engine::Result& r);   // erst nach HINT_DELAY_MS anzeigen (springt sonst stark)
 	void showHint(const engine::Result& r);
 	void stopSearch();
 
@@ -74,6 +78,12 @@ private:
 	bool computerThinking = false;
 	bool hintRunning = false;
 	int hintSquare = -1;           // Feldindex des Zugvorschlags, -1 = keiner
+	QElapsedTimer hintClock;       // seit wann der Tipp rechnet
+	engine::Result pendingHint;    // bester Vorschlag aus der ersten Sekunde
+	bool hintPending = false;
+	int lastHumanMove = -1;        // blauer Rahmen
+	int lastComputerMove = -1;     // roter Rahmen
+	bool animateNextUpdate = false;
 	QString passInfo;              // z. B. "Weiss muss passen. "
 	QString lastResultInfo;        // z. B. "Der PC gewinnt bei bestem Spiel."
 	bool quitDialogOpen = false;

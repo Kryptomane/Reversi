@@ -26,6 +26,7 @@ public:
 	QLabel* levelLabel;
 	QComboBox* levelBox;
 	QCheckBox* hintBox;
+	QCheckBox* animateBox;
 	QLabel* MessageLabel;
 	QPushButton* newGameButton;
 	QPushButton* exitGameButton;
@@ -109,9 +110,14 @@ public:
 		modeLabel->setMinimumWidth(labelWidth);
 		levelLabel->setMinimumWidth(labelWidth);
 
+		QHBoxLayout* optionRow = new QHBoxLayout();
 		hintBox = new QCheckBox(QStringLiteral("Besten Zug zeigen"), w);
-		hintBox->setMinimumHeight((int)(lh * 2.0));
-		mainLayout->addWidget(hintBox);
+		animateBox = new QCheckBox(QStringLiteral("Animation"), w);
+		for (QCheckBox* c : { hintBox, animateBox })
+			c->setMinimumHeight((int)(lh * 2.0));
+		optionRow->addWidget(hintBox, 1);
+		optionRow->addWidget(animateBox);
+		mainLayout->addLayout(optionRow);
 
 		MessageLabel = new QLabel(w);
 		MessageLabel->setWordWrap(true);
