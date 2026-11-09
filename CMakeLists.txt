@@ -41,7 +41,12 @@ set_target_properties(reversi PROPERTIES
     QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
     QT_ANDROID_VERSION_CODE ${ANDROID_VERSION_CODE}
     QT_ANDROID_MIN_SDK_VERSION 28
+    # Bibliotheken komprimiert in die APK packen: APK etwa halb so gross (~14 statt ~31 MB),
+    # dafuer werden sie bei der Installation entpackt (etwas mehr Speicher auf dem Geraet).
+    QT_ANDROID_LEGACY_PACKAGING TRUE
 )
+# Das Spiel zeichnet alles selbst und laedt keine Bilder/Icons: diese Plugins nicht mitliefern.
+qt_import_plugins(reversi EXCLUDE_BY_TYPE imageformats iconengines)
 
 if(NOT ANDROID)
     # Tests (perft, Spielablauf, Endspiel exakt, Stufen) und Benchmark - im Release-Build laufen lassen.
