@@ -101,12 +101,6 @@ public:
 		scoreRow->addWidget(swapButton);
 		mainLayout->addLayout(scoreRow);
 
-		// Bewertung der Stellung ("Gewinnchance: Schwarz > Weiss"), Zeichen waechst mit dem Vorteil
-		evalLabel = new QLabel(w);
-		evalLabel->setAlignment(Qt::AlignCenter);
-		evalLabel->setTextFormat(Qt::RichText);
-		evalLabel->setMinimumHeight((int)(lh * 2.6)); // Platz fuer das grosse Zeichen, Layout springt nicht
-		mainLayout->addWidget(evalLabel);
 
 		// Gegner (Computer oder zweiter Mensch) und Spielstaerke; Beschriftungen gleich breit
 		QHBoxLayout* modeRow = new QHBoxLayout();
@@ -134,16 +128,27 @@ public:
 		hintBox = new QCheckBox(QStringLiteral("Besten Zug zeigen"), w);
 		animateBox = new QCheckBox(QStringLiteral("Animation"), w);
 		for (QCheckBox* c : { hintBox, animateBox })
-			c->setMinimumHeight((int)(lh * 2.0));
+			c->setMinimumHeight((int)(lh * 2.2));
 		optionRow->addWidget(hintBox, 1);
 		optionRow->addWidget(animateBox);
 		mainLayout->addLayout(optionRow);
 
+		// Statuszeile: links wer dran ist, rechts die Gewinnchance (Zeichen waechst mit dem Vorteil)
+		QHBoxLayout* statusRow = new QHBoxLayout();
 		MessageLabel = new QLabel(w);
 		MessageLabel->setWordWrap(true);
-		MessageLabel->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
-		MessageLabel->setMinimumHeight(lh * 3); // Layout springt nicht, wenn der Text wechselt
-		mainLayout->addWidget(MessageLabel);
+		MessageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+		evalLabel = new QLabel(w);
+		evalLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+		evalLabel->setTextFormat(Qt::RichText);
+		for (QLabel* l : { MessageLabel, evalLabel })
+		{
+			l->setMinimumHeight(lh * 3); // Platz fuer zwei Zeilen und das grosse Zeichen, Layout springt nicht
+			l->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+		}
+		statusRow->addWidget(MessageLabel, 1);
+		statusRow->addWidget(evalLabel, 1);
+		mainLayout->addLayout(statusRow);
 
 		QHBoxLayout* buttonRow = new QHBoxLayout();
 		buttonRow->setSpacing(12);

@@ -165,7 +165,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 	if (isComputer(game.toMove()))
 	{
 		startSearch(SearchKind::ComputerMove);
-		showStatus(passInfo + QStringLiteral("PC denkt ..."));
+		showStatus(passInfo + QStringLiteral("PC (") + colorName(computerColor) + QStringLiteral(") denkt ..."));
 	}
 	else
 	{
@@ -216,7 +216,7 @@ void ReversiGui::onSearchProgress(const engine::Result& r, int forPosition, Sear
 	if (kind == SearchKind::Hint)
 		offerHint(r);
 	else if (computerThinking)
-		showStatus(passInfo + QStringLiteral("PC denkt ... Tiefe ") + QString::number(r.depth));
+		showStatus(passInfo + QStringLiteral("PC (") + colorName(computerColor) + QStringLiteral(") denkt ...\nTiefe ") + QString::number(r.depth));
 }
 
 void ReversiGui::onSearchResult(const engine::Result& r, int forPosition, SearchKind kind)
@@ -364,7 +364,7 @@ void ReversiGui::showEvaluation(int blackScore, bool proven)
 		const int px = (int)(ui->evalLabel->fontInfo().pixelSize() * scale);
 		result = QStringLiteral("Schwarz <span style=\"font-size:%1px; font-weight:bold;\">%2</span> ").arg(px).arg(sign) + white;
 	}
-	ui->evalLabel->setText(QStringLiteral("Gewinnchance: ") + result);
+	ui->evalLabel->setText(QStringLiteral("Gewinnchance:<br>") + result);
 }
 
 void ReversiGui::showFinalEvaluation()
@@ -489,7 +489,7 @@ QString ReversiGui::yourTurnText() const
 {
 	if (mode == Mode::TwoPlayers)
 		return colorName(game.toMove()) + QStringLiteral(" ist dran.");
-	return QStringLiteral("Du bist dran (") + colorName(game.toMove()) + ").";
+	return QStringLiteral("Du bist dran (") + colorName(game.toMove()) + QStringLiteral(")\nPC: ") + colorName(computerColor);
 }
 
 QString ReversiGui::gameOverText() const
