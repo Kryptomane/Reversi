@@ -13,7 +13,7 @@ eingeschlossen sind, dreht diese um. Am Ende gewinnt, wer mehr Steine seiner Far
 
 - **10 Spielstärken** von *Anfänger* bis *Weltklasse* – die Stärke hängt an der Suchtiefe, nicht an der Rechenzeit,
   und ist damit auf jedem Gerät gleich
-- **Zwei Spielmodi:** gegen den Computer oder zu zweit an einem Gerät
+- **Drei Spielmodi:** gegen den Computer, zu zweit an einem Gerät oder **Bluetooth-Party** mit zwei Handys
 - **Bester Zug:** Zugvorschlag, der im Hintergrund immer tiefer rechnet, solange du nachdenkst
 - **Gewinnchance** live angezeigt – sobald das Spiel durchgerechnet ist, steht der Sieger fest
 - **Zug zurück**, **Farbe tauschen** mitten in der Partie, **Startstellung tauschen** und **Weiß beginnt**
@@ -44,7 +44,8 @@ eingeschlossen sind, dreht diese um. Am Ende gewinnt, wer mehr Steine seiner Far
 
 ## Bauen
 
-Voraussetzungen: **Qt 6** (Widgets), **CMake ≥ 3.19**, ein C++20-Compiler.
+Voraussetzungen: **Qt 6** (Widgets), **CMake ≥ 3.19**, ein C++20-Compiler. Für die Bluetooth-Partie zusätzlich
+das Modul **Qt Connectivity** (Qt Bluetooth) – fehlt es, wird ohne Bluetooth gebaut.
 
 **Desktop:** Projekt (`CMakeLists.txt`) in Qt Creator öffnen, Kit wählen, *Release* bauen.
 

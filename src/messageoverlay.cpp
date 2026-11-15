@@ -61,8 +61,12 @@ MessageOverlay::MessageOverlay(QWidget* parent) : QWidget(parent)
 	connect(noButton, &QPushButton::clicked, this, &MessageOverlay::cancel);
 	connect(yesButton, &QPushButton::clicked, this, [this]() {
 		hide();
-		if (yesAction)
-			yesAction();
+		noAction = nullptr;
+		if (auto action = std::move(yesAction))
+		{
+			yesAction = nullptr;
+			action();
+		}
 	});
 
 	parent->installEventFilter(this);
@@ -70,14 +74,21 @@ MessageOverlay::MessageOverlay(QWidget* parent) : QWidget(parent)
 	hide();
 }
 
-void MessageOverlay::show(const Message& m, std::function<void()> onYes)
+void MessageOverlay::show(const Message& m, std::function<void()> onYes, std::function<void()> onNo)
 {
+	if (auto replaced = std::move(noAction)) // offene Rueckfrage wird ersetzt: gilt als abgelehnt
+	{
+		noAction = nullptr;
+		replaced();
+	}
 	titleLabel->setText(m.title);
 	detailLabel->setText(m.detail);
 	detailLabel->setVisible(!m.detail.isEmpty());
 	yesButton->setText(m.yesText);
 	noButton->setText(m.noText);
+	noButton->setVisible(!m.noText.isEmpty());
 	yesAction = std::move(onYes);
+	noAction = std::move(onNo);
 
 	for (QCheckBox* box : optionBoxes)
 		box->deleteLater();
@@ -120,6 +131,11 @@ void MessageOverlay::cancel()
 {
 	hide();
 	yesAction = nullptr;
+	if (auto action = std::move(noAction))
+	{
+		noAction = nullptr;
+		action();
+	}
 }
 
 bool MessageOverlay::eventFilter(QObject* watched, QEvent* e)

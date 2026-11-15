@@ -1,5 +1,6 @@
 #pragma once
-// Hauptfenster: Mensch gegen PC (PC spielt Weiss) oder zwei Menschen an einem Geraet.
+// Hauptfenster: Mensch gegen PC (PC spielt Weiss), zwei Menschen an einem Geraet oder
+// zwei Menschen an zwei Geraeten ueber Bluetooth.
 // Die Engine rechnet in einem Hintergrund-Thread, damit die Oberflaeche nie haengt;
 // Zwischenstaende und Ergebnisse kommen per Qt-Ereignis zurueck.
 
@@ -12,6 +13,8 @@
 namespace Ui { class ReversiGui; }
 class QCloseEvent;
 class MessageOverlay;
+class BluetoothLink;
+class BluetoothLobby;
 
 class ReversiGui : public QWidget
 {
@@ -26,7 +29,7 @@ protected:
 	void closeEvent(QCloseEvent* e) override;
 
 private:
-	enum class Mode { VsComputer, TwoPlayers };
+	enum class Mode { VsComputer, TwoPlayers, Bluetooth };
 	enum class SearchKind { ComputerMove, Hint };
 
 	static constexpr int HINT_DELAY_MS = 1000;
@@ -35,13 +38,28 @@ private:
 
 	// Ablauf
 	void requestNewGame();                     // Dialog: Startstellung tauschen, Weiss beginnt
-	void startNewGame();
+	void startNewGame();                       // mit den Startoptionen aus den Einstellungen
+	void startGame(const Game::StartOptions& start);
+	static Game::StartOptions savedStartOptions();
 	void requestColorSwap();                   // Mensch uebernimmt die andere Farbe (nach Rueckfrage)
 	void swapColors();
 	void showGameOver();                       // vollflaechige Meldung: Glueckwunsch / Weiter ueben
 	void onFieldClicked(int x, int y);
 	void handleTurn(Game::Turn turn);          // nach jedem Zug: Anzeige, Status, ggf. PC/Tipp starten
 	void undoMove();                           // gegen den PC: letzten PC-Zug und eigenen Zug zuruecknehmen
+	void undoUntil(Color who);                 // zuruecknehmen, bis wieder `who` am Zug ist (mind. ein Zug)
+
+	// Bluetooth (zwei Geraete): Protokoll in Textzeilen, siehe onBluetoothLine
+	void openBluetoothLobby();
+	void onBluetoothConnected();
+	void onBluetoothLine(const QString& line);
+	void onBluetoothLost();
+	void leaveBluetooth(bool notifyPeer);      // Partie geht danach zu zweit an diesem Geraet weiter
+	void startBluetoothGame(const Game::StartOptions& start, bool swapColors);
+	void showNotice(const QString& title, const QString& detail = QString());
+	bool remoteToMove() const { return mode == Mode::Bluetooth && !game.isOver() && game.toMove() != myColor; }
+	int moveStamp() const { return game.count(Color::Black) + game.count(Color::White); } // steigt mit jedem Zug
+	QString peerName() const;
 
 	// Engine im Hintergrund
 	void startSearch(SearchKind kind);
@@ -65,6 +83,8 @@ private:
 	void setupModeBox();
 	void setupLevelBox();
 	void onModeChanged();
+	void setMode(Mode m);
+	void selectModeBox(Mode m);                // Auswahl anzeigen, ohne onModeChanged auszuloesen
 	void onHintToggled(bool on);
 	int level() const;
 
@@ -82,7 +102,10 @@ private:
 	bool gameInProgress() const { return game.canUndo() && !game.isOver(); }
 
 	bool isComputer(Color c) const { return mode == Mode::VsComputer && c == computerColor; }
-	bool humanToMove() const { return !game.isOver() && !computerThinking && !isComputer(game.toMove()); }
+	bool humanToMove() const
+	{
+		return !game.isOver() && !computerThinking && !isComputer(game.toMove()) && !remoteToMove() && !undoAsked;
+	}
 
 	Ui::ReversiGui* ui;
 	MessageOverlay* overlay;
@@ -108,4 +131,12 @@ private:
 	bool animateNextUpdate = false;
 	QString passInfo;              // z. B. "Weiss muss passen. "
 	bool quitConfirmed = false;
+
+	// Bluetooth
+	BluetoothLink* link;
+	BluetoothLobby* lobby;
+	Color myColor = Color::Black;  // eigene Farbe in der Bluetooth-Partie
+	bool undoAsked = false;        // Rueckfrage "Zug zuruecknehmen" laeuft -> eigene Zuege gesperrt
+	bool newGameAsked = false;     // Rueckfrage "Neues Spiel" laeuft
+	Game::StartOptions askedStart; // Startoptionen dieser Rueckfrage
 };

@@ -1,10 +1,13 @@
 #include "reversigui.h"
 #include "ui_reversigui.h"
 #include "messageoverlay.h"
+#include "bluetoothlink.h"
+#include "bluetoothlobby.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QDebug>
 #include <cstdlib>
@@ -12,7 +15,9 @@
 ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui)
 {
 	ui->setupUi(this);
-	overlay = new MessageOverlay(this);
+	link = new BluetoothLink(this);
+	lobby = new BluetoothLobby(this, link);
+	overlay = new MessageOverlay(this); // nach der Lobby anlegen: Meldungen liegen darueber
 	computerColor = QSettings().value("computerColor", 1).toInt() == 0 ? Color::Black : Color::White;
 #ifndef Q_OS_ANDROID
 	resize(460, 860); // Desktop: Hochformat wie am Handy, frei skalierbar
@@ -30,6 +35,10 @@ ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui
 	connect(ui->exitGameButton, &QPushButton::clicked, this, &ReversiGui::confirmQuit);
 	connect(ui->hintBox, &QCheckBox::toggled, this, &ReversiGui::onHintToggled);
 	connect(ui->animateBox, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("animate", on); });
+	connect(lobby, &BluetoothLobby::cancelled, this, [this]() { selectModeBox(mode); });
+	connect(link, &BluetoothLink::connected, this, &ReversiGui::onBluetoothConnected);
+	connect(link, &BluetoothLink::lineReceived, this, &ReversiGui::onBluetoothLine);
+	connect(link, &BluetoothLink::disconnected, this, &ReversiGui::onBluetoothLost);
 	qApp->installEventFilter(this);
 
 	startNewGame();
@@ -50,16 +59,23 @@ void ReversiGui::requestNewGame()
 	QSettings settings;
 	MessageOverlay::Message m;
 	m.title = QStringLiteral("Neues Spiel");
-	if (gameInProgress())
+	if (mode == Mode::Bluetooth)
+		m.detail = peerName() + QStringLiteral(" muss zustimmen. Die Farben werden getauscht.");
+	else if (gameInProgress())
 		m.detail = QStringLiteral("Die laufende Partie geht verloren.");
-	m.yesText = QStringLiteral("Starten");
+	m.yesText = mode == Mode::Bluetooth ? QStringLiteral("Anfragen") : QStringLiteral("Starten");
 	m.options = { { QStringLiteral("Startstellung tauschen"), settings.value("swapStart", false).toBool() },
 	              { QStringLiteral("Wei\u00DF beginnt"), settings.value("whiteBegins", false).toBool() } };
 	overlay->show(m, [this]() {
 		QSettings s;
 		s.setValue("swapStart", overlay->isOptionChecked(0));
 		s.setValue("whiteBegins", overlay->isOptionChecked(1));
-		startNewGame();
+		if (mode != Mode::Bluetooth)
+			return startNewGame();
+		askedStart = savedStartOptions();
+		newGameAsked = true;
+		link->send(QStringLiteral("NEW? %1 %2").arg(askedStart.swappedCenter ? 1 : 0).arg(askedStart.first == Color::White ? 1 : 0));
+		showStatus(QStringLiteral("Warte auf Zustimmung von ") + peerName() + QStringLiteral(" \u2026"));
 	});
 }
 
@@ -98,6 +114,9 @@ void ReversiGui::showGameOver()
 			title = QStringLiteral("Unentschieden!");
 		else if (mode == Mode::TwoPlayers)
 			title = colorName(b > w ? Color::Black : Color::White) + QStringLiteral(" gewinnt!");
+		else if (mode == Mode::Bluetooth)
+			title = (b > w ? Color::Black : Color::White) == myColor ? QStringLiteral("Gl\u00FCckwunsch!")
+			                                                         : peerName() + QStringLiteral(" gewinnt!");
 		else
 			title = isComputer(b > w ? Color::Black : Color::White) ? QStringLiteral("Weiter \u00FCben ;)") : QStringLiteral("Gl\u00FCckwunsch!");
 		overlay->show({ title, score, QStringLiteral("Neues Spiel"), QStringLiteral("Zur\u00FCck zum Spiel"), true },
@@ -105,13 +124,23 @@ void ReversiGui::showGameOver()
 	});
 }
 
-void ReversiGui::startNewGame()
+Game::StartOptions ReversiGui::savedStartOptions()
 {
-	stopSearch();
 	QSettings settings; // Startoptionen aus dem "Neues Spiel"-Dialog
 	Game::StartOptions start;
 	start.swappedCenter = settings.value("swapStart", false).toBool();
 	start.first = settings.value("whiteBegins", false).toBool() ? Color::White : Color::Black;
+	return start;
+}
+
+void ReversiGui::startNewGame()
+{
+	startGame(savedStartOptions());
+}
+
+void ReversiGui::startGame(const Game::StartOptions& start)
+{
+	stopSearch();
 	game.reset(start);
 	ai.clear();
 	clearFrames();
@@ -125,7 +154,10 @@ void ReversiGui::onFieldClicked(int x, int y)
 		return;
 	if (hintRunning)
 		stopSearch(); // Tipp wird nicht mehr gebraucht
-	// gegen den PC verschwinden die Rahmen, sobald der Mensch zieht; zu zweit zeigen sie den letzten Zug
+	// gegen den PC (und den Mitspieler am anderen Geraet) verschwinden die Rahmen, sobald man selbst
+	// zieht; zu zweit an einem Geraet zeigen sie den letzten Zug
+	if (mode == Mode::Bluetooth)
+		link->send(QStringLiteral("MOVE ") + QString::number(square));
 	handleTurn(playAndRemember(square, mode == Mode::TwoPlayers));
 }
 
@@ -135,10 +167,34 @@ void ReversiGui::undoMove()
 {
 	if (!game.canUndo())
 		return;
+	if (mode == Mode::Bluetooth) // der Mitspieler muss zustimmen
+	{
+		if (undoAsked)
+			return;
+		undoAsked = true;
+		link->send(QStringLiteral("UNDO? ") + QString::number(moveStamp()));
+		showStatus(QStringLiteral("Warte auf Zustimmung von ") + peerName() + QStringLiteral(" \u2026"));
+		updateView();
+		return;
+	}
+	if (mode == Mode::TwoPlayers)
+	{
+		stopSearch();
+		game.undo();
+		clearFrames();
+		handleTurn(Game::Turn::Next);
+		return;
+	}
+	undoUntil(opponent(computerColor));
+}
+
+// Beide Geraete einer Bluetooth-Partie rufen das mit derselben Farbe auf -> gleiche Stellung.
+void ReversiGui::undoUntil(Color who)
+{
 	stopSearch();
 	do
 		game.undo();
-	while (game.canUndo() && isComputer(game.toMove()));
+	while (game.canUndo() && game.toMove() != who);
 	clearFrames();
 	handleTurn(Game::Turn::Next);
 }
@@ -167,6 +223,8 @@ void ReversiGui::handleTurn(Game::Turn turn)
 		startSearch(SearchKind::ComputerMove);
 		showStatus(passInfo + QStringLiteral("PC (") + colorName(computerColor) + QStringLiteral(") denkt ..."));
 	}
+	else if (remoteToMove())
+		showStatus(passInfo + peerName() + QStringLiteral(" (") + colorName(game.toMove()) + QStringLiteral(") ist dran \u2026"));
 	else
 	{
 		showStatus(passInfo + yourTurnText());
@@ -372,12 +430,238 @@ void ReversiGui::showFinalEvaluation()
 	showEvaluation(game.count(Color::Black) - game.count(Color::White), true);
 }
 
+// ======================= Bluetooth (zwei Geraete) =======================
+//
+// Protokoll: eine Textzeile je Nachricht. Wer eroeffnet (Host), legt die Startstellung fest.
+//   START <version> <tausch 0/1> <weissBeginnt 0/1> <HostFarbe B/W>   Host -> Gast, nach dem Verbinden
+//   MOVE <feld>                     Zug (Feld 0..63); der Empfaenger prueft, ob er legal ist
+//   UNDO? <stempel>  UNDO_OK  UNDO_NO   Zug zuruecknehmen (Stempel = Steinzahl, erkennt veraltete Fragen)
+//   NEW? <tausch> <weissBeginnt>  NEW_OK  NEW_NO   neues Spiel, die Farben werden dabei getauscht
+//   BYE                             Mitspieler verlaesst die Partie
+// Kommen beide Rueckfragen gleichzeitig, gilt die des Hosts (sonst liefen die Stellungen auseinander).
+
+namespace {
+constexpr int BLUETOOTH_PROTOCOL = 1;
+}
+
+void ReversiGui::openBluetoothLobby()
+{
+	selectModeBox(mode); // bis die Verbindung steht, bleibt der bisherige Modus
+	stopSearch();
+	lobby->open();
+}
+
+// Host: eigene Startoptionen schicken und loslegen. Gast: wartet in der Lobby auf START.
+void ReversiGui::onBluetoothConnected()
+{
+	if (!link->isHost())
+		return;
+	lobby->dismiss();
+	const Game::StartOptions start = savedStartOptions();
+	myColor = Color::Black;
+	link->send(QStringLiteral("START %1 %2 %3 B").arg(BLUETOOTH_PROTOCOL)
+		.arg(start.swappedCenter ? 1 : 0).arg(start.first == Color::White ? 1 : 0));
+	mode = Mode::Bluetooth;
+	selectModeBox(mode);
+	ui->levelBox->setEnabled(false);
+	startBluetoothGame(start, false);
+}
+
+void ReversiGui::onBluetoothLine(const QString& line)
+{
+	const QStringList part = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+	const QString cmd = part.value(0);
+	auto number = [&part](int i) { return part.value(i).toInt(); };
+	qDebug() << "Bluetooth <-" << line;
+
+	if (cmd == QStringLiteral("START"))
+	{
+		if (link->isHost())
+			return;
+		lobby->dismiss();
+		if (part.size() < 5 || number(1) != BLUETOOTH_PROTOCOL)
+		{
+			leaveBluetooth(true);
+			showNotice(QStringLiteral("Andere App-Version"),
+			           QStringLiteral("Bitte auf beiden Geräten dieselbe Version von Reversi installieren."));
+			return;
+		}
+		Game::StartOptions start;
+		start.swappedCenter = number(2) != 0;
+		start.first = number(3) != 0 ? Color::White : Color::Black;
+		myColor = part.value(4) == QStringLiteral("B") ? Color::White : Color::Black;
+		mode = Mode::Bluetooth;
+		selectModeBox(mode);
+		ui->levelBox->setEnabled(false);
+		startBluetoothGame(start, false);
+		return;
+	}
+	if (mode != Mode::Bluetooth)
+		return;
+
+	if (cmd == QStringLiteral("MOVE"))
+	{
+		bool ok = false;
+		const int square = part.value(1).toInt(&ok);
+		if (!ok || !remoteToMove() || !game.isLegal(square))
+		{
+			leaveBluetooth(true);
+			showNotice(QStringLiteral("Verbindung getrennt"),
+			           QStringLiteral("Die Spielstände der beiden Geräte passten nicht mehr zusammen."));
+			return;
+		}
+		if (hintRunning)
+			stopSearch();
+		handleTurn(playAndRemember(square, true)); // roter Ring wie beim PC-Zug
+	}
+	else if (cmd == QStringLiteral("UNDO?"))
+	{
+		if (undoAsked)
+		{
+			if (link->isHost())
+				return link->send(QStringLiteral("UNDO_NO")); // eigene Frage hat Vorrang
+			undoAsked = false;                            // eigene Frage verwerfen, die des Hosts gilt
+		}
+		const int stamp = number(1);
+		if (stamp != moveStamp() || !game.canUndo())
+			return link->send(QStringLiteral("UNDO_NO"));
+		overlay->show({ QStringLiteral("Zug zurücknehmen?"),
+		                peerName() + QStringLiteral(" möchte den letzten Zug zurücknehmen."),
+		                QStringLiteral("Erlauben"), QStringLiteral("Ablehnen") },
+		              [this, stamp]() {
+			              if (mode != Mode::Bluetooth)
+				              return;
+			              if (stamp != moveStamp() || !game.canUndo())
+				              return link->send(QStringLiteral("UNDO_NO"));
+			              link->send(QStringLiteral("UNDO_OK"));
+			              undoUntil(opponent(myColor));
+		              },
+		              [this]() { link->send(QStringLiteral("UNDO_NO")); });
+	}
+	else if (cmd == QStringLiteral("UNDO_OK"))
+	{
+		if (!undoAsked)
+			return;
+		undoAsked = false;
+		undoUntil(myColor);
+	}
+	else if (cmd == QStringLiteral("UNDO_NO"))
+	{
+		if (!undoAsked)
+			return;
+		undoAsked = false;
+		handleTurn(Game::Turn::Next); // Status und Zugmarken wiederherstellen
+		showNotice(peerName() + QStringLiteral(" möchte den Zug nicht zurücknehmen."));
+	}
+	else if (cmd == QStringLiteral("NEW?"))
+	{
+		if (newGameAsked)
+		{
+			if (link->isHost())
+				return link->send(QStringLiteral("NEW_NO"));
+			newGameAsked = false;
+		}
+		Game::StartOptions start;
+		start.swappedCenter = number(1) != 0;
+		start.first = number(2) != 0 ? Color::White : Color::Black;
+		QString detail = peerName() + QStringLiteral(" möchte ein neues Spiel starten. Du spielst dann ")
+			+ colorName(opponent(myColor)) + ".";
+		if (start.swappedCenter)
+			detail += QStringLiteral("\nStartstellung getauscht.");
+		if (start.first == Color::White)
+			detail += QStringLiteral("\nWeiß beginnt.");
+		overlay->show({ QStringLiteral("Neues Spiel?"), detail, QStringLiteral("Starten"), QStringLiteral("Ablehnen") },
+		              [this, start]() {
+			              if (mode != Mode::Bluetooth)
+				              return;
+			              link->send(QStringLiteral("NEW_OK"));
+			              startBluetoothGame(start, true);
+		              },
+		              [this]() { link->send(QStringLiteral("NEW_NO")); });
+	}
+	else if (cmd == QStringLiteral("NEW_OK"))
+	{
+		if (newGameAsked)
+			startBluetoothGame(askedStart, true);
+	}
+	else if (cmd == QStringLiteral("NEW_NO"))
+	{
+		if (!newGameAsked)
+			return;
+		newGameAsked = false;
+		handleTurn(Game::Turn::Next);
+		showNotice(peerName() + QStringLiteral(" möchte gerade kein neues Spiel."));
+	}
+	else if (cmd == QStringLiteral("BYE"))
+	{
+		const QString name = peerName();
+		leaveBluetooth(false);
+		showNotice(name + QStringLiteral(" hat die Partie verlassen."),
+		           QStringLiteral("Ihr könnt hier zu zweit an einem Gerät weiterspielen."));
+	}
+	// unbekannte Befehle (neuere Version) ignorieren
+}
+
+void ReversiGui::onBluetoothLost()
+{
+	const QString name = peerName();
+	if (lobby->isOpen()) // Gast wartete noch auf START
+	{
+		lobby->dismiss();
+		link->close();
+		selectModeBox(mode);
+		showNotice(QStringLiteral("Verbindung getrennt"));
+		return;
+	}
+	if (mode != Mode::Bluetooth)
+		return;
+	leaveBluetooth(false);
+	showNotice(QStringLiteral("Verbindung zu ") + name + QStringLiteral(" verloren"),
+	           QStringLiteral("Ihr könnt hier zu zweit an einem Gerät weiterspielen."));
+}
+
+void ReversiGui::leaveBluetooth(bool notifyPeer)
+{
+	if (notifyPeer)
+		link->sendAndClose(QStringLiteral("BYE"));
+	else
+		link->close();
+	undoAsked = false;
+	newGameAsked = false;
+	if (overlay->isOpen())
+		overlay->cancel(); // offene Rueckfrage des Mitspielers ist hinfaellig
+	if (mode == Mode::Bluetooth)
+		setMode(Mode::TwoPlayers);
+}
+
+void ReversiGui::startBluetoothGame(const Game::StartOptions& start, bool swapColors)
+{
+	if (swapColors)
+		myColor = opponent(myColor);
+	undoAsked = false;
+	newGameAsked = false;
+	startGame(start);
+}
+
+void ReversiGui::showNotice(const QString& title, const QString& detail)
+{
+	overlay->show({ title, detail, QStringLiteral("OK"), QString() }, nullptr);
+}
+
+QString ReversiGui::peerName() const
+{
+	const QString name = link->peerName();
+	return name.isEmpty() ? QStringLiteral("Mitspieler") : name;
+}
+
 // ======================= Einstellungen =======================
 
 void ReversiGui::setupModeBox()
 {
 	ui->modeBox->addItem(QStringLiteral("Computer"), (int)Mode::VsComputer);
 	ui->modeBox->addItem(QStringLiteral("Mensch (2 Spieler)"), (int)Mode::TwoPlayers);
+	if (BluetoothLink::compiledIn())
+		ui->modeBox->addItem(QStringLiteral("Mensch \u00FCber Bluetooth"), (int)Mode::Bluetooth);
 	mode = QSettings().value("mode", 0).toInt() == (int)Mode::TwoPlayers ? Mode::TwoPlayers : Mode::VsComputer;
 	ui->modeBox->setCurrentIndex(ui->modeBox->findData((int)mode));
 	ui->levelBox->setEnabled(mode == Mode::VsComputer);
@@ -402,14 +686,44 @@ void ReversiGui::setupLevelBox()
 }
 
 // Wechsel zwischen PC- und Zwei-Spieler-Modus: die laufende Partie geht einfach weiter.
+// Bluetooth wird erst nach dem Verbindungsaufbau aktiv; eine Bluetooth-Partie verlaesst man nach Rueckfrage.
 void ReversiGui::onModeChanged()
 {
-	mode = (Mode)ui->modeBox->currentData().toInt();
-	QSettings().setValue("mode", (int)mode);
-	ui->levelBox->setEnabled(mode == Mode::VsComputer);
+	const Mode chosen = (Mode)ui->modeBox->currentData().toInt();
+	if (chosen == mode)
+		return;
+	if (mode == Mode::Bluetooth)
+	{
+		selectModeBox(mode); // erst nach "Verlassen" wirklich wechseln
+		overlay->show({ QStringLiteral("Bluetooth-Partie verlassen?"),
+		                QStringLiteral("Die Verbindung zu ") + peerName() + QStringLiteral(" wird getrennt."),
+		                QStringLiteral("Verlassen") }, [this, chosen]() {
+			leaveBluetooth(true);
+			setMode(chosen);
+		});
+		return;
+	}
+	if (chosen == Mode::Bluetooth)
+		return openBluetoothLobby();
+	setMode(chosen);
+}
+
+void ReversiGui::setMode(Mode m)
+{
+	mode = m;
+	selectModeBox(m);
+	if (m != Mode::Bluetooth) // Bluetooth braucht beim Start eine neue Verbindung: nicht merken
+		QSettings().setValue("mode", (int)m);
+	ui->levelBox->setEnabled(m == Mode::VsComputer);
 	stopSearch();
 	clearFrames();
 	handleTurn(Game::Turn::Next);
+}
+
+void ReversiGui::selectModeBox(Mode m)
+{
+	const QSignalBlocker block(ui->modeBox);
+	ui->modeBox->setCurrentIndex(ui->modeBox->findData((int)m));
 }
 
 int ReversiGui::level() const
@@ -459,7 +773,7 @@ void ReversiGui::updateView()
 	ui->WhiteChipsLabel->setText(QStringLiteral("Wei\u00DF  ") + QString::number(game.count(Color::White)));
 	ui->BlackChipsLabel->setStyleSheet(scoreStyle(Color::Black));
 	ui->WhiteChipsLabel->setStyleSheet(scoreStyle(Color::White));
-	ui->undoButton->setEnabled(game.canUndo());
+	ui->undoButton->setEnabled(game.canUndo() && !undoAsked);
 	ui->swapButton->setVisible(mode == Mode::VsComputer);
 }
 
@@ -489,6 +803,8 @@ QString ReversiGui::yourTurnText() const
 {
 	if (mode == Mode::TwoPlayers)
 		return colorName(game.toMove()) + QStringLiteral(" ist dran.");
+	if (mode == Mode::Bluetooth)
+		return QStringLiteral("Du bist dran (") + colorName(game.toMove()) + QStringLiteral(")\nGegner: ") + peerName();
 	return QStringLiteral("Du bist dran (") + colorName(game.toMove()) + QStringLiteral(")\nPC: ") + colorName(computerColor);
 }
 
@@ -517,6 +833,8 @@ bool ReversiGui::eventFilter(QObject* object, QEvent* e)
 				qDebug() << "Zurueck-Taste";
 				if (overlay->isOpen())
 					overlay->cancel();
+				else if (lobby->isOpen())
+					lobby->cancel();
 				else
 					QTimer::singleShot(0, this, &ReversiGui::confirmQuit);
 			}
@@ -549,5 +867,7 @@ void ReversiGui::confirmQuit()
 void ReversiGui::quit()
 {
 	quitConfirmed = true;
+	if (mode == Mode::Bluetooth)
+		link->sendAndClose(QStringLiteral("BYE"));
 	qApp->quit();
 }
