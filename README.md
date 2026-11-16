@@ -14,7 +14,8 @@ eingeschlossen sind, dreht diese um. Am Ende gewinnt, wer mehr Steine seiner Far
 - **10 Spielstärken** von *Anfänger* bis *Weltklasse* – die Stärke hängt an der Suchtiefe, nicht an der Rechenzeit,
   und ist damit auf jedem Gerät gleich
 - **Drei Spielmodi:** gegen den Computer, zu zweit an einem Gerät oder **Bluetooth-Party** mit zwei Handys
-- **Bester Zug:** Zugvorschlag, der im Hintergrund immer tiefer rechnet, solange du nachdenkst
+- **Bester Zug:** Zugvorschlag, der im Hintergrund immer tiefer rechnet, solange du nachdenkst (über Bluetooth abgeschaltet – fair für beide)
+- **„Starker Zug!“** wird kurz eingeblendet, wenn ein Zug die Gewinnchance des Ziehenden deutlich verbessert
 - **Gewinnchance** live angezeigt – sobald das Spiel durchgerechnet ist, steht der Sieger fest
 - **Zug zurück**, **Farbe tauschen** mitten in der Partie, **Startstellung tauschen** und **Weiß beginnt**
 - Der letzte PC-Zug ist rot, die dabei umgedrehten Steine orange markiert; optionale Dreh-Animation

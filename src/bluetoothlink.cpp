@@ -59,7 +59,7 @@ void BluetoothLink::prepare(std::function<void(bool, const QString&)> done)
 			});
 		}
 		if (!local->isValid())
-			return finish(false, QStringLiteral("Dieses Gerät hat kein Bluetooth."));
+			return finish(false, QStringLiteral("Dieses Ger\u00E4t hat kein Bluetooth."));
 		if (local->hostMode() != QBluetoothLocalDevice::HostPoweredOff)
 			return finish(true, QString());
 		// Bluetooth ist aus: einschalten (Android fragt nach) und auf die Rueckmeldung warten
@@ -86,14 +86,14 @@ void BluetoothLink::prepare(std::function<void(bool, const QString&)> done)
 		return;
 	case Qt::PermissionStatus::Denied:
 		finish(false, QStringLiteral("Die App darf Bluetooth nicht verwenden. Bitte in den Einstellungen erlauben "
-		                             "(Berechtigung „Geräte in der Nähe“)."));
+		                             "(Berechtigung \u201EGer\u00E4te in der N\u00E4he\u201C)."));
 		return;
 	case Qt::PermissionStatus::Undetermined:
 		qApp->requestPermission(permission, this, [finish, checkAdapter](const QPermission& p) {
 			if (p.status() == Qt::PermissionStatus::Granted)
 				checkAdapter();
 			else
-				finish(false, QStringLiteral("Ohne Bluetooth-Berechtigung ist keine Partie über Bluetooth möglich."));
+				finish(false, QStringLiteral("Ohne Bluetooth-Berechtigung ist keine Partie \u00FCber Bluetooth m\u00F6glich."));
 		});
 		return;
 	}
@@ -126,12 +126,12 @@ void BluetoothLink::host()
 	connect(server, &QBluetoothServer::errorOccurred, this, [this](QBluetoothServer::Error e) {
 		qDebug() << "Bluetooth-Server-Fehler" << e;
 		if (!linked)
-			emit failed(QStringLiteral("Das Spiel konnte nicht eröffnet werden."));
+			emit failed(QStringLiteral("Das Spiel konnte nicht er\u00F6ffnet werden."));
 	});
 	const QBluetoothServiceInfo info = server->listen(serviceUuid(), QStringLiteral("Reversi"));
 	if (!info.isValid())
 	{
-		emit failed(QStringLiteral("Das Spiel konnte nicht eröffnet werden (Bluetooth belegt?)."));
+		emit failed(QStringLiteral("Das Spiel konnte nicht er\u00F6ffnet werden (Bluetooth belegt?)."));
 		return;
 	}
 	delete service;
@@ -163,8 +163,8 @@ void BluetoothLink::startSearch()
 			emit failed(e == QBluetoothDeviceDiscoveryAgent::PoweredOffError
 				? QStringLiteral("Bluetooth ist ausgeschaltet.")
 				: e == QBluetoothDeviceDiscoveryAgent::MissingPermissionsError
-				? QStringLiteral("Die Suche braucht die Berechtigung „Geräte in der Nähe“ (Android 9–11: Standort einschalten).")
-				: QStringLiteral("Die Gerätesuche ist fehlgeschlagen."));
+				? QStringLiteral("Die Suche braucht die Berechtigung \u201EGer\u00E4te in der N\u00E4he\u201C (Android 9\u201311: Standort einschalten).")
+				: QStringLiteral("Die Ger\u00E4tesuche ist fehlgeschlagen."));
 		});
 	}
 	agent->start(QBluetoothDeviceDiscoveryAgent::ClassicMethod);
@@ -204,7 +204,7 @@ void BluetoothLink::adoptSocket(QBluetoothSocket* s)
 		if (wasLinked)
 			emit disconnected();
 		else
-			emit failed(QStringLiteral("Keine Verbindung. Läuft auf dem anderen Gerät „Spiel eröffnen“?"));
+			emit failed(QStringLiteral("Keine Verbindung. L\u00E4uft auf dem anderen Ger\u00E4t \u201ESpiel er\u00F6ffnen\u201C?"));
 	});
 	connect(s, &QBluetoothSocket::errorOccurred, this, [this, s](QBluetoothSocket::SocketError e) {
 		qDebug() << "Bluetooth-Socket-Fehler" << e;
@@ -215,7 +215,7 @@ void BluetoothLink::adoptSocket(QBluetoothSocket* s)
 		if (wasLinked)
 			emit disconnected();
 		else
-			emit failed(QStringLiteral("Keine Verbindung. Läuft auf dem anderen Gerät „Spiel eröffnen“?"));
+			emit failed(QStringLiteral("Keine Verbindung. L\u00E4uft auf dem anderen Ger\u00E4t \u201ESpiel er\u00F6ffnen\u201C?"));
 	});
 }
 
@@ -294,8 +294,8 @@ void BluetoothLink::stopServer()
 		delete service;
 		service = nullptr;
 	}
-	if (local && local->hostMode() == QBluetoothLocalDevice::HostDiscoverable)
-		local->setHostMode(QBluetoothLocalDevice::HostConnectable);
+	// Sichtbarkeit und Bluetooth selbst bleiben, wie sie sind: das entscheidet der Mensch
+	// (Android beendet die Sichtbarkeit nach Ablauf der Zeit von selbst).
 }
 
 void BluetoothLink::close()

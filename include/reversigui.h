@@ -12,6 +12,7 @@
 
 namespace Ui { class ReversiGui; }
 class QCloseEvent;
+class QLabel;
 class MessageOverlay;
 class BluetoothLink;
 class BluetoothLobby;
@@ -35,6 +36,9 @@ private:
 	static constexpr int HINT_DELAY_MS = 1000;
 	static constexpr int EVAL_EQUAL_BAND = 80;  // |Bewertung| darunter gilt als ausgeglichen ("=")
 	static constexpr int EVAL_FULL_SCALE = 1500; // ab hier ist das Vergleichszeichen maximal gross (~4 Ecken)
+	static constexpr int STRONG_MOVE_GAIN = 150; // so viel muss sich die Gewinnchance des Ziehenden verbessern
+	static constexpr int STRONG_MOVE_MIN_DEPTH = 4; // flachere Bewertungen sind zu ungenau
+	static constexpr int STRONG_MOVE_SHOW_MS = 2500;
 
 	// Ablauf
 	void requestNewGame();                     // Dialog: Startstellung tauschen, Weiss beginnt
@@ -78,6 +82,13 @@ private:
 	void onEvaluation(const engine::Result& r, int forPosition, Color sideToMove);
 	void showEvaluation(int blackScore, bool proven);
 	void showFinalEvaluation();
+	void onAnalysisDone(const engine::Result& r, int forPosition, Color sideToMove);
+
+	// "Starker Zug": Gewinnchance des Ziehenden vor und nach dem Zug vergleichen
+	void rememberEvalBeforeMove(Color mover);
+	void checkStrongMove();
+	void showStrongMove(Color mover);
+	static int clampedScore(int score, bool proven);
 
 	// Einstellungen
 	void setupModeBox();
@@ -86,6 +97,8 @@ private:
 	void setMode(Mode m);
 	void selectModeBox(Mode m);                // Auswahl anzeigen, ohne onModeChanged auszuloesen
 	void onHintToggled(bool on);
+	void applyModeUi();                        // Spielstaerke/Tipp je nach Modus freigeben
+	bool hintAllowed() const;                  // angehakt und nicht ueber Bluetooth (dort waere es Schummeln)
 	int level() const;
 
 	// Anzeige
@@ -115,6 +128,17 @@ private:
 	engine::Engine analyzer{ 18 };  // nur fuer die Bewertungsanzeige
 	std::thread analysisThread;
 	int shownEvalDepth = -1;       // Tiefe der angezeigten Bewertung (tiefere ersetzen flachere)
+	int shownEvalBlack = 0;        // angezeigte Bewertung aus Sicht von Schwarz
+	bool shownEvalProven = false;
+	struct StrongMoveCheck
+	{
+		bool active = false;
+		int forPosition = -1;      // Stellung nach dem Zug
+		Color mover = Color::Black;
+		int before = 0;            // Bewertung vor dem Zug aus Sicht des Ziehenden (begrenzt)
+	} strongCheck;
+	QLabel* strongLabel;           // kurz eingeblendet ueber dem Brett
+	int strongShowId = 0;
 	Mode mode = Mode::VsComputer;
 	Color computerColor = Color::White;
 

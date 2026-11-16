@@ -25,7 +25,7 @@ BluetoothLobby::BluetoothLobby(QWidget* parent, BluetoothLink* bluetooth) : QWid
 		"QPushButton#lobbyJoin, QPushButton#lobbyAgain { background: #1565c0; }"
 		"QPushButton#lobbyJoin:pressed, QPushButton#lobbyAgain:pressed { background: #0d47a1; }"));
 
-	titleLabel = new QLabel(QStringLiteral("Partie über Bluetooth"), panel);
+	titleLabel = new QLabel(QStringLiteral("Partie \u00FCber Bluetooth"), panel);
 	infoLabel = new QLabel(panel);
 	for (QLabel* l : { titleLabel, infoLabel })
 	{
@@ -41,7 +41,7 @@ BluetoothLobby::BluetoothLobby(QWidget* parent, BluetoothLink* bluetooth) : QWid
 	deviceList->setMinimumHeight(QFontMetrics(font()).height() * 10);
 	QScroller::grabGesture(deviceList->viewport(), QScroller::LeftMouseButtonGesture); // Wischen am Handy
 
-	hostButton = new QPushButton(QStringLiteral("Spiel eröffnen"), panel);
+	hostButton = new QPushButton(QStringLiteral("Spiel er\u00F6ffnen"), panel);
 	joinButton = new QPushButton(QStringLiteral("Spiel beitreten"), panel);
 	againButton = new QPushButton(QStringLiteral("Erneut suchen"), panel);
 	cancelButton = new QPushButton(QStringLiteral("Abbrechen"), panel);
@@ -77,8 +77,8 @@ BluetoothLobby::BluetoothLobby(QWidget* parent, BluetoothLink* bluetooth) : QWid
 		if (page != Page::Joining)
 			return;
 		const QString name = item->text();
-		showPage(Page::Waiting, QStringLiteral("Verbinde mit ") + name + QStringLiteral(" …\n\n"
-			"Beim ersten Mal fragen beide Geräte nach dem Koppeln – bitte bestätigen."));
+		showPage(Page::Waiting, QStringLiteral("Verbinde mit ") + name + QStringLiteral(" \u2026\n\n"
+			"Beim ersten Mal fragen beide Ger\u00E4te nach dem Koppeln \u2013 bitte best\u00E4tigen."));
 		link->join(item->data(Qt::UserRole).toString(), name);
 	});
 	connect(link, &BluetoothLink::deviceFound, this, [this](const QString& name, const QString& address) {
@@ -92,14 +92,14 @@ BluetoothLobby::BluetoothLobby(QWidget* parent, BluetoothLink* bluetooth) : QWid
 			}
 		QListWidgetItem* item = new QListWidgetItem(name, deviceList);
 		item->setData(Qt::UserRole, address);
-		infoLabel->setText(QStringLiteral("Tippe auf das Gerät deines Mitspielers.\nSuche läuft …"));
+		infoLabel->setText(QStringLiteral("Tippe auf das Ger\u00E4t deines Mitspielers.\nSuche l\u00E4uft \u2026"));
 	});
 	connect(link, &BluetoothLink::searchFinished, this, [this]() {
 		if (page != Page::Joining)
 			return;
 		infoLabel->setText(deviceList->count() > 0
-			? QStringLiteral("Tippe auf das Gerät deines Mitspielers.")
-			: QStringLiteral("Kein Gerät gefunden. Hat dein Mitspieler „Spiel eröffnen“ gewählt?"));
+			? QStringLiteral("Tippe auf das Ger\u00E4t deines Mitspielers.")
+			: QStringLiteral("Kein Ger\u00E4t gefunden. Hat dein Mitspieler \u201ESpiel er\u00F6ffnen\u201C gew\u00E4hlt?"));
 		againButton->setVisible(true);
 	});
 	connect(link, &BluetoothLink::failed, this, &BluetoothLobby::onFailed);
@@ -111,7 +111,7 @@ BluetoothLobby::BluetoothLobby(QWidget* parent, BluetoothLink* bluetooth) : QWid
 
 void BluetoothLobby::open()
 {
-	showPage(Page::Waiting, QStringLiteral("Bluetooth wird vorbereitet …"));
+	showPage(Page::Waiting, QStringLiteral("Bluetooth wird vorbereitet \u2026"));
 	setGeometry(parentWidget()->rect());
 	raise();
 	show();
@@ -119,8 +119,8 @@ void BluetoothLobby::open()
 		if (!isVisible())
 			return;
 		if (ok)
-			showPage(Page::Choice, QStringLiteral("Ein Handy eröffnet das Spiel, das andere tritt bei.\n"
-				"Wer eröffnet, spielt Schwarz."));
+			showPage(Page::Choice, QStringLiteral("Ein Handy er\u00F6ffnet das Spiel, das andere tritt bei.\n"
+				"Wer er\u00F6ffnet, spielt Schwarz."));
 		else
 		{
 			showPage(Page::Choice, message); // z. B. Berechtigung fehlt: nur "Abbrechen" anbieten
@@ -143,16 +143,16 @@ void BluetoothLobby::showPage(Page p, const QString& info)
 void BluetoothLobby::startHosting()
 {
 	const QString me = link->localName();
-	showPage(Page::Hosting, QStringLiteral("Warte auf Mitspieler …\n\n")
-		+ (me.isEmpty() ? QString() : QStringLiteral("Dein Gerät heißt „") + me + QStringLiteral("“.\n"))
-		+ QStringLiteral("Auf dem anderen Handy „Spiel beitreten“ wählen und dieses Gerät antippen."));
+	showPage(Page::Hosting, QStringLiteral("Warte auf Mitspieler \u2026\n\n")
+		+ (me.isEmpty() ? QString() : QStringLiteral("Dein Ger\u00E4t hei\u00DFt \u201E") + me + QStringLiteral("\u201C.\n"))
+		+ QStringLiteral("Auf dem anderen Handy \u201ESpiel beitreten\u201C w\u00E4hlen und dieses Ger\u00E4t antippen."));
 	link->host();
 }
 
 void BluetoothLobby::startJoining()
 {
 	deviceList->clear();
-	showPage(Page::Joining, QStringLiteral("Suche Geräte in der Nähe …"));
+	showPage(Page::Joining, QStringLiteral("Suche Ger\u00E4te in der N\u00E4he \u2026"));
 	link->startSearch();
 }
 

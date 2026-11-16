@@ -15,6 +15,12 @@
 ReversiGui::ReversiGui(QWidget* parent) : QWidget(parent), ui(new Ui::ReversiGui)
 {
 	ui->setupUi(this);
+	strongLabel = new QLabel(this);
+	strongLabel->setAlignment(Qt::AlignCenter);
+	strongLabel->setAttribute(Qt::WA_TransparentForMouseEvents); // Klicks gehen aufs Brett
+	strongLabel->setStyleSheet(QStringLiteral(
+		"background: #2e7d32; color: white; border: 2px solid white; border-radius: 12px; padding: 6px 16px; font-weight: bold;"));
+	strongLabel->hide();
 	link = new BluetoothLink(this);
 	lobby = new BluetoothLobby(this, link);
 	overlay = new MessageOverlay(this); // nach der Lobby anlegen: Meldungen liegen darueber
@@ -141,6 +147,7 @@ void ReversiGui::startNewGame()
 void ReversiGui::startGame(const Game::StartOptions& start)
 {
 	stopSearch();
+	strongCheck = StrongMoveCheck();
 	game.reset(start);
 	ai.clear();
 	clearFrames();
@@ -180,6 +187,7 @@ void ReversiGui::undoMove()
 	if (mode == Mode::TwoPlayers)
 	{
 		stopSearch();
+		strongCheck = StrongMoveCheck();
 		game.undo();
 		clearFrames();
 		handleTurn(Game::Turn::Next);
@@ -192,6 +200,7 @@ void ReversiGui::undoMove()
 void ReversiGui::undoUntil(Color who)
 {
 	stopSearch();
+	strongCheck = StrongMoveCheck();
 	do
 		game.undo();
 	while (game.canUndo() && game.toMove() != who);
@@ -228,7 +237,7 @@ void ReversiGui::handleTurn(Game::Turn turn)
 	else
 	{
 		showStatus(passInfo + yourTurnText());
-		if (ui->hintBox->isChecked())
+		if (hintAllowed())
 			startSearch(SearchKind::Hint);
 	}
 }
@@ -315,6 +324,8 @@ void ReversiGui::applyComputerMove(const engine::Result& r)
 Game::Turn ReversiGui::playAndRemember(int square, bool showFrames)
 {
 	const Color mover = game.toMove();
+	checkStrongMove(); // kam dieser Zug, bevor die Bewertung des vorigen fertig war: jetzt entscheiden
+	rememberEvalBeforeMove(mover);
 	if (!showFrames)
 		clearFrames();
 	else
@@ -349,7 +360,7 @@ void ReversiGui::offerHint(const engine::Result& r)
 void ReversiGui::showHint(const engine::Result& r)
 {
 	hintPending = false;
-	if (!ui->hintBox->isChecked() || !humanToMove())
+	if (!hintAllowed() || !humanToMove())
 		return;
 	hintSquare = r.move;
 	updateHintLabel(&r);
@@ -383,7 +394,7 @@ void ReversiGui::startAnalysis()
 	analyzer.resetStop();
 	analysisThread = std::thread([this, P, O, s, forPosition, side]() {
 		const engine::Result r = analyzer.search(P, O, s);
-		QMetaObject::invokeMethod(this, [this, r, forPosition, side]() { onEvaluation(r, forPosition, side); },
+		QMetaObject::invokeMethod(this, [this, r, forPosition, side]() { onAnalysisDone(r, forPosition, side); },
 		                          Qt::QueuedConnection);
 	});
 }
@@ -405,7 +416,9 @@ void ReversiGui::onEvaluation(const engine::Result& r, int forPosition, Color si
 	if (depth <= shownEvalDepth)
 		return;
 	shownEvalDepth = depth;
-	showEvaluation(sideToMove == Color::Black ? r.score : -r.score, proven);
+	shownEvalBlack = sideToMove == Color::Black ? r.score : -r.score;
+	shownEvalProven = proven;
+	showEvaluation(shownEvalBlack, proven);
 }
 
 void ReversiGui::showEvaluation(int blackScore, bool proven)
@@ -428,6 +441,70 @@ void ReversiGui::showEvaluation(int blackScore, bool proven)
 void ReversiGui::showFinalEvaluation()
 {
 	showEvaluation(game.count(Color::Black) - game.count(Color::White), true);
+}
+
+void ReversiGui::onAnalysisDone(const engine::Result& r, int forPosition, Color sideToMove)
+{
+	onEvaluation(r, forPosition, sideToMove);
+	if (forPosition == positionId)
+		checkStrongMove();
+}
+
+// ======================= Starker Zug =======================
+// Ein Zug ist "stark", wenn danach die Gewinnchance des Ziehenden deutlich besser ist als davor.
+// Bei perfekter Rechnung koennte ein Zug die Lage nur halten; besser wird sie, wenn der Zug
+// staerker ist, als die Bewertung vorher erkannt hatte. Gilt fuer alle Spieler in allen Modi.
+
+int ReversiGui::clampedScore(int score, bool proven)
+{
+	if (proven) // bewiesen: Sieg/Niederlage auf die Skala der Schaetzung abbilden
+		return score > 0 ? EVAL_FULL_SCALE : score < 0 ? -EVAL_FULL_SCALE : 0;
+	return std::clamp(score, -EVAL_FULL_SCALE, EVAL_FULL_SCALE);
+}
+
+// Direkt vor dem Setzen; die Stellung danach bekommt positionId + 1 (handleTurn).
+void ReversiGui::rememberEvalBeforeMove(Color mover)
+{
+	strongCheck = StrongMoveCheck();
+	if (shownEvalDepth < STRONG_MOVE_MIN_DEPTH || shownEvalProven)
+		return; // zu ungenau bzw. schon bewiesen (dann kann kein Zug mehr etwas verbessern)
+	strongCheck.active = true;
+	strongCheck.forPosition = positionId + 1;
+	strongCheck.mover = mover;
+	const int black = clampedScore(shownEvalBlack, false);
+	strongCheck.before = mover == Color::Black ? black : -black;
+}
+
+void ReversiGui::checkStrongMove()
+{
+	if (!strongCheck.active || strongCheck.forPosition != positionId || shownEvalDepth < STRONG_MOVE_MIN_DEPTH)
+		return;
+	strongCheck.active = false;
+	const int black = clampedScore(shownEvalBlack, shownEvalProven);
+	const int after = strongCheck.mover == Color::Black ? black : -black;
+	if (after - strongCheck.before >= STRONG_MOVE_GAIN)
+		showStrongMove(strongCheck.mover);
+}
+
+void ReversiGui::showStrongMove(Color mover)
+{
+	QString text = QStringLiteral("Starker Zug!");
+	if (mode == Mode::TwoPlayers)
+		text = QStringLiteral("Starker Zug von ") + colorName(mover) + "!";
+	else if (isComputer(mover))
+		text = QStringLiteral("Starker Zug vom PC");
+	else if (mode == Mode::Bluetooth && mover != myColor)
+		text = QStringLiteral("Starker Zug von ") + peerName();
+	strongLabel->setText(text);
+	strongLabel->adjustSize();
+	const QRect board = ui->board->geometry();
+	strongLabel->move(board.x() + (board.width() - strongLabel->width()) / 2, board.y() + board.height() / 25);
+	strongLabel->show();
+	const int id = ++strongShowId;
+	QTimer::singleShot(STRONG_MOVE_SHOW_MS, this, [this, id]() {
+		if (id == strongShowId)
+			strongLabel->hide();
+	});
 }
 
 // ======================= Bluetooth (zwei Geraete) =======================
@@ -463,7 +540,7 @@ void ReversiGui::onBluetoothConnected()
 		.arg(start.swappedCenter ? 1 : 0).arg(start.first == Color::White ? 1 : 0));
 	mode = Mode::Bluetooth;
 	selectModeBox(mode);
-	ui->levelBox->setEnabled(false);
+	applyModeUi();
 	startBluetoothGame(start, false);
 }
 
@@ -483,7 +560,7 @@ void ReversiGui::onBluetoothLine(const QString& line)
 		{
 			leaveBluetooth(true);
 			showNotice(QStringLiteral("Andere App-Version"),
-			           QStringLiteral("Bitte auf beiden Geräten dieselbe Version von Reversi installieren."));
+			           QStringLiteral("Bitte auf beiden Ger\u00E4ten dieselbe Version von Reversi installieren."));
 			return;
 		}
 		Game::StartOptions start;
@@ -492,7 +569,7 @@ void ReversiGui::onBluetoothLine(const QString& line)
 		myColor = part.value(4) == QStringLiteral("B") ? Color::White : Color::Black;
 		mode = Mode::Bluetooth;
 		selectModeBox(mode);
-		ui->levelBox->setEnabled(false);
+		applyModeUi();
 		startBluetoothGame(start, false);
 		return;
 	}
@@ -505,9 +582,8 @@ void ReversiGui::onBluetoothLine(const QString& line)
 		const int square = part.value(1).toInt(&ok);
 		if (!ok || !remoteToMove() || !game.isLegal(square))
 		{
-			leaveBluetooth(true);
-			showNotice(QStringLiteral("Verbindung getrennt"),
-			           QStringLiteral("Die Spielstände der beiden Geräte passten nicht mehr zusammen."));
+			qDebug() << "Ungueltiger Zug vom Mitspieler:" << line;
+			onBluetoothLost(); // genauso wie ein Verbindungsabbruch
 			return;
 		}
 		if (hintRunning)
@@ -525,8 +601,8 @@ void ReversiGui::onBluetoothLine(const QString& line)
 		const int stamp = number(1);
 		if (stamp != moveStamp() || !game.canUndo())
 			return link->send(QStringLiteral("UNDO_NO"));
-		overlay->show({ QStringLiteral("Zug zurücknehmen?"),
-		                peerName() + QStringLiteral(" möchte den letzten Zug zurücknehmen."),
+		overlay->show({ QStringLiteral("Zug zur\u00FCcknehmen?"),
+		                peerName() + QStringLiteral(" m\u00F6chte den letzten Zug zur\u00FCcknehmen."),
 		                QStringLiteral("Erlauben"), QStringLiteral("Ablehnen") },
 		              [this, stamp]() {
 			              if (mode != Mode::Bluetooth)
@@ -551,7 +627,7 @@ void ReversiGui::onBluetoothLine(const QString& line)
 			return;
 		undoAsked = false;
 		handleTurn(Game::Turn::Next); // Status und Zugmarken wiederherstellen
-		showNotice(peerName() + QStringLiteral(" möchte den Zug nicht zurücknehmen."));
+		showNotice(peerName() + QStringLiteral(" m\u00F6chte den Zug nicht zur\u00FCcknehmen."));
 	}
 	else if (cmd == QStringLiteral("NEW?"))
 	{
@@ -564,12 +640,12 @@ void ReversiGui::onBluetoothLine(const QString& line)
 		Game::StartOptions start;
 		start.swappedCenter = number(1) != 0;
 		start.first = number(2) != 0 ? Color::White : Color::Black;
-		QString detail = peerName() + QStringLiteral(" möchte ein neues Spiel starten. Du spielst dann ")
+		QString detail = peerName() + QStringLiteral(" m\u00F6chte ein neues Spiel starten. Du spielst dann ")
 			+ colorName(opponent(myColor)) + ".";
 		if (start.swappedCenter)
 			detail += QStringLiteral("\nStartstellung getauscht.");
 		if (start.first == Color::White)
-			detail += QStringLiteral("\nWeiß beginnt.");
+			detail += QStringLiteral("\nWei\u00DF beginnt.");
 		overlay->show({ QStringLiteral("Neues Spiel?"), detail, QStringLiteral("Starten"), QStringLiteral("Ablehnen") },
 		              [this, start]() {
 			              if (mode != Mode::Bluetooth)
@@ -590,14 +666,14 @@ void ReversiGui::onBluetoothLine(const QString& line)
 			return;
 		newGameAsked = false;
 		handleTurn(Game::Turn::Next);
-		showNotice(peerName() + QStringLiteral(" möchte gerade kein neues Spiel."));
+		showNotice(peerName() + QStringLiteral(" m\u00F6chte gerade kein neues Spiel."));
 	}
 	else if (cmd == QStringLiteral("BYE"))
 	{
 		const QString name = peerName();
 		leaveBluetooth(false);
 		showNotice(name + QStringLiteral(" hat die Partie verlassen."),
-		           QStringLiteral("Ihr könnt hier zu zweit an einem Gerät weiterspielen."));
+		           QStringLiteral("Ihr k\u00F6nnt hier zu zweit an einem Ger\u00E4t weiterspielen."));
 	}
 	// unbekannte Befehle (neuere Version) ignorieren
 }
@@ -617,7 +693,7 @@ void ReversiGui::onBluetoothLost()
 		return;
 	leaveBluetooth(false);
 	showNotice(QStringLiteral("Verbindung zu ") + name + QStringLiteral(" verloren"),
-	           QStringLiteral("Ihr könnt hier zu zweit an einem Gerät weiterspielen."));
+	           QStringLiteral("Ihr k\u00F6nnt hier zu zweit an einem Ger\u00E4t weiterspielen."));
 }
 
 void ReversiGui::leaveBluetooth(bool notifyPeer)
@@ -664,7 +740,7 @@ void ReversiGui::setupModeBox()
 		ui->modeBox->addItem(QStringLiteral("Mensch \u00FCber Bluetooth"), (int)Mode::Bluetooth);
 	mode = QSettings().value("mode", 0).toInt() == (int)Mode::TwoPlayers ? Mode::TwoPlayers : Mode::VsComputer;
 	ui->modeBox->setCurrentIndex(ui->modeBox->findData((int)mode));
-	ui->levelBox->setEnabled(mode == Mode::VsComputer);
+	applyModeUi();
 	connect(ui->modeBox, &QComboBox::currentIndexChanged, this, &ReversiGui::onModeChanged);
 }
 
@@ -714,7 +790,7 @@ void ReversiGui::setMode(Mode m)
 	selectModeBox(m);
 	if (m != Mode::Bluetooth) // Bluetooth braucht beim Start eine neue Verbindung: nicht merken
 		QSettings().setValue("mode", (int)m);
-	ui->levelBox->setEnabled(m == Mode::VsComputer);
+	applyModeUi();
 	stopSearch();
 	clearFrames();
 	handleTurn(Game::Turn::Next);
@@ -726,6 +802,17 @@ void ReversiGui::selectModeBox(Mode m)
 	ui->modeBox->setCurrentIndex(ui->modeBox->findData((int)m));
 }
 
+bool ReversiGui::hintAllowed() const
+{
+	return ui->hintBox->isChecked() && mode != Mode::Bluetooth;
+}
+
+void ReversiGui::applyModeUi()
+{
+	ui->levelBox->setEnabled(mode == Mode::VsComputer);
+	ui->hintBox->setEnabled(mode != Mode::Bluetooth); // Haken bleibt gemerkt, wirkt nur ohne Bluetooth
+}
+
 int ReversiGui::level() const
 {
 	return ui->levelBox->currentData().toInt();
@@ -734,7 +821,7 @@ int ReversiGui::level() const
 void ReversiGui::onHintToggled(bool on)
 {
 	QSettings().setValue("hint", on);
-	if (on && humanToMove() && hintSquare < 0 && !hintRunning)
+	if (on && hintAllowed() && humanToMove() && hintSquare < 0 && !hintRunning)
 		startSearch(SearchKind::Hint);
 	if (!on)
 	{
